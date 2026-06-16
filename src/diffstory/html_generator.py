@@ -362,29 +362,61 @@ def _collect_blame_data(
     Returns a dict with:
       - line_blame: dict mapping "file_idx:lineno" to blame entry
       - commits: dict mapping commit_hash to commit metadata
+
+    Handles renamed files by using the old path for deletion blame
+    and the new path for addition/context blame. Skips blame when
+    no revision info is available (e.g. --diff mode).
     """
+    # If no commit info at all, skip blame entirely (e.g. --diff mode)
+    if not staged and commit_a is None and commit_b is None:
+        return {"line_blame": {}, "commits": {}}
+
     line_blame: dict = {}
     all_commits: set = set()
 
     for fi, file in enumerate(files):
-        filepath = file.display_path
-        if filepath == "/dev/null":
+        new_filepath = file.display_path
+        old_filepath = file.old_path if file.old_path != "/dev/null" else file.display_path
+
+        if new_filepath == "/dev/null" and old_filepath == "/dev/null":
             continue
 
-        # Determine which revision to blame
+        # Determine which revisions to blame
         new_revision = None  # None means working tree
         if commit_b:
             new_revision = commit_b
         elif staged:
-            # For staged, blame working tree to capture staged additions
-            pass  # blame working tree
+            pass  # blame working tree for staged additions
 
-        # Get blame for current (new) version
-        # TODO: handle renamed files — for renames, file.display_path is the new path
-        # but blame on the old revision needs the old path
-        blame_new = get_blame_for_revision(filepath, revision=new_revision)
+        old_revision = None
+        if commit_a:
+            old_revision = commit_a
+        elif staged:
+            old_revision = "HEAD"
 
-        # Map blame by new line number for additions and context
+        # Get blame for current (new) version — skip if file doesn't exist at revision
+        blame_new: dict = {}
+        if new_filepath != "/dev/null":
+            try:
+                blame_new = get_blame_for_revision(new_filepath, revision=new_revision)
+            except Exception:
+                pass
+
+        # Get blame for old version if different from new (e.g. renames)
+        blame_old: dict = blame_new
+        if old_revision and old_filepath != new_filepath:
+            try:
+                blame_old = get_blame_for_revision(old_filepath, revision=old_revision)
+            except Exception:
+                blame_old = {}
+        elif old_revision and old_filepath == new_filepath and old_revision != new_revision:
+            # Same path but different revision — re-blame
+            try:
+                blame_old = get_blame_for_revision(old_filepath, revision=old_revision)
+            except Exception:
+                pass
+
+        # Map blame by line number for additions and context
         for hunk in file.hunks:
             for line in hunk.lines:
                 if line.line_type in ("addition", "context") and line.new_lineno:
@@ -395,31 +427,22 @@ def _collect_blame_data(
                         all_commits.add(entry["commit"])
 
                 elif line.line_type == "deletion" and line.old_lineno:
-                    # For deletions, try to blame the old version of the file
-                    # commit_a is the old version being diffed
-                    old_revision = None
-                    if commit_a:
-                        old_revision = commit_a
-                    elif staged:
-                        old_revision = "HEAD"
-
-                    if old_revision:
-                        try:
-                            blame_old = get_blame_for_revision(filepath, revision=old_revision)
-                            entry = blame_old.get(line.old_lineno)
-                            if entry:
-                                key = str(fi) + ":" + str(line.old_lineno)
-                                line_blame[key] = entry
-                                all_commits.add(entry["commit"])
-                        except Exception:
-                            pass
+                    if blame_old:
+                        entry = blame_old.get(line.old_lineno)
+                        if entry:
+                            key = str(fi) + ":" + str(line.old_lineno)
+                            line_blame[key] = entry
+                            all_commits.add(entry["commit"])
 
     # Collect commit metadata for all unique commits
     commits: dict = {}
     for chash in all_commits:
         if chash and len(chash) == 40:
-            info = get_commit_info(chash)
-            commits[chash] = info
+            try:
+                info = get_commit_info(chash)
+                commits[chash] = info
+            except Exception:
+                pass
 
     return {
         "line_blame": line_blame,
@@ -620,10 +643,27 @@ def _build_html_template(
         '            <button class="view-btn" data-view="inline" onclick="switchView(\'inline\')" title="Inline Edit (I)">Inline</button>\n'
         '        </div>\n'
         '        <div class="toolbar-right">\n'
-        '            <button class="tool-btn" onclick="focusSearch()" id="search-btn" title="Search (F or /)">\U0001f50d</button>\n'
-        '            <button class="tool-btn" onclick="toggleTheme()" id="theme-btn" title="Toggle Theme (D)">\U0001f319</button>\n'
-        '            <button class="tool-btn" onclick="toggleStats()" id="stats-btn" title="Statistics">\U0001f4ca</button>\n'
-        '            <button class="tool-btn" onclick="toggleSidebar()" id="sidebar-btn" title="File List">\U0001f4c1</button>\n'
+        '            <button class="tool-btn" onclick="focusSearch()" id="search-btn" title="Search (F or /)">\n'
+        '                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" class="tool-icon">\n'
+        '                    <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/>\n'
+        '                </svg>\n'
+        '            </button>\n'
+        '            <button class="tool-btn" onclick="toggleTheme()" id="theme-btn" title="Toggle Theme (D)">\n'
+        '                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" class="tool-icon" id="theme-icon">\n'
+        '                    <path d="M8 12a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm0-1.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm5.657-8.157a.75.75 0 0 1 0 1.061l-1.061 1.06a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l1.06-1.06a.75.75 0 0 1 1.06 0Zm-9.193 9.193a.75.75 0 0 1 0 1.06l-1.06 1.061a.75.75 0 1 1-1.061-1.06l1.06-1.061a.75.75 0 0 1 1.061 0ZM8 0a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0V.75A.75.75 0 0 1 8 0ZM3 8a.75.75 0 0 1-.75.75H.75a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 3 8Zm13 0a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 16 8Zm-8 5a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 13Zm3.536-1.464a.75.75 0 0 1 1.06 0l1.061 1.06a.75.75 0 0 1-1.06 1.061l-1.061-1.06a.75.75 0 0 1 0-1.061ZM2.343 2.343a.75.75 0 0 1 1.061 0l1.06 1.061a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018l-1.06-1.06a.75.75 0 0 1 0-1.06Z"/>\n'
+        '                </svg>\n'
+        '            </button>\n'
+        '            <button class="tool-btn" onclick="toggleStats()" id="stats-btn" title="Statistics">\n'
+        '                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" class="tool-icon">\n'
+        '                    <path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0 1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"/>\n'
+        '                </svg>\n'
+        '            </button>\n'
+        '            <button class="tool-btn" onclick="toggleSidebar()" id="sidebar-btn" title="File List">\n'
+        '                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" class="tool-icon">\n'
+        '                    <path d="M6.823 7.823a.25.25 0 0 1 0 .354l-2.396 2.396A.25.25 0 0 1 4 10.396V5.604a.25.25 0 0 1 .427-.177Z"/>\n'
+        '                    <path d="M1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25V1.75C0 .784.784 0 1.75 0ZM1.5 1.75v12.5c0 .138.112.25.25.25H9.5v-13H1.75a.25.25 0 0 0-.25.25ZM11 14.5h3.25a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H11Z"/>\n'
+        '                </svg>\n'
+        '            </button>\n'
         '        </div>\n'
         '    </header>\n'
         '    <!-- Global Search Bar -->\n'
@@ -756,6 +796,8 @@ def _get_css() -> str:
     --text-secondary: #656d76;
     --border: #d0d7de;
     --border-light: #e0e4e8;
+    --line-number-color: #6e7681;
+    --diff-context-color: #656d76;
     --accent: #0969da;
     --accent-hover: #0550ae;
     --add-bg: #e6ffec;
@@ -788,6 +830,8 @@ def _get_css() -> str:
     --text-secondary: #8b949e;
     --border: #30363d;
     --border-light: #21262d;
+    --line-number-color: #484f58;
+    --diff-context-color: #8b949e;
     --accent: #58a6ff;
     --accent-hover: #79c0ff;
     --add-bg: #12262b;
@@ -813,7 +857,7 @@ def _get_css() -> str:
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif, 'Apple Color Emoji';
     font-size: 14px;
     line-height: 1.5;
     color: var(--text);
@@ -826,6 +870,15 @@ body {
     display: flex;
     flex-direction: column;
     height: 100vh;
+}
+
+.tool-icon {
+    display: block;
+    fill: currentColor;
+}
+
+.tool-btn svg.tool-icon {
+    pointer-events: none;
 }
 
 /* Toolbar */
@@ -1075,7 +1128,7 @@ body {
     flex: 1;
     font-size: 14px;
     font-weight: 600;
-    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1130,7 +1183,7 @@ body {
     padding: 6px 14px;
     background: var(--hunk-header-bg);
     color: var(--hunk-header-text);
-    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px;
     border-bottom: 1px solid var(--border-light);
 }
@@ -1143,7 +1196,7 @@ body {
 .diff-line {
     display: flex;
     align-items: stretch;
-    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px;
     line-height: 1.5;
     min-height: 22px;
@@ -1214,7 +1267,7 @@ body {
     width: 50%;
     display: flex;
     align-items: stretch;
-    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px;
     line-height: 1.5;
     min-height: 22px;
@@ -1366,7 +1419,7 @@ body {
 .stats-table td {
     padding: 6px 8px;
     border-bottom: 1px solid var(--border-light);
-    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px;
 }
 
@@ -1428,7 +1481,7 @@ body {
 }
 
 .tooltip-commit {
-    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 11px;
     color: var(--text-secondary);
 }
@@ -1517,7 +1570,7 @@ body {
 }
 
 .drawer-commit-hash {
-    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 13px;
     color: var(--accent);
 }
@@ -1760,7 +1813,7 @@ body {
     font-size: 14px;
     font-weight: 600;
     color: var(--text);
-    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
 .binary-note {
@@ -2030,13 +2083,19 @@ function switchView(viewName) {
     });
 }
 
-// Theme Toggle
+// Theme Toggle — swap sun/moon SVG
+const sunPath = 'M8 12a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm0-1.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm5.657-8.157a.75.75 0 0 1 0 1.061l-1.061 1.06a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l1.06-1.06a.75.75 0 0 1 1.06 0Zm-9.193 9.193a.75.75 0 0 1 0 1.06l-1.06 1.061a.75.75 0 1 1-1.061-1.06l1.06-1.061a.75.75 0 0 1 1.061 0ZM8 0a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0V.75A.75.75 0 0 1 8 0ZM3 8a.75.75 0 0 1-.75.75H.75a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 3 8Zm13 0a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 16 8Zm-8 5a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 13Zm3.536-1.464a.75.75 0 0 1 1.06 0l1.061 1.06a.75.75 0 0 1-1.06 1.061l-1.061-1.06a.75.75 0 0 1 0-1.061ZM2.343 2.343a.75.75 0 0 1 1.061 0l1.06 1.061a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018l-1.06-1.06a.75.75 0 0 1 0-1.06Z';
+const moonPath = 'M9.598 1.591a.749.749 0 0 1 .785-.175 7.001 7.001 0 1 1-8.967 8.967.75.75 0 0 1 .961-.96 5.5 5.5 0 0 0 7.046-7.046.75.75 0 0 1 .175-.786Zm1.616 1.945a7 7 0 0 1-7.678 7.678 5.499 5.499 0 1 0 7.678-7.678Z';
+
 function toggleTheme() {
     var html = document.documentElement;
     var isDark = html.getAttribute('data-theme') === 'dark';
-    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
-    document.getElementById('theme-btn').textContent = isDark ? '\\u{1F319}' : '\\u{1F31E}';
-    localStorage.setItem('diffstory-theme', isDark ? 'light' : 'dark');
+    var newTheme = isDark ? 'light' : 'dark';
+    html.setAttribute('data-theme', newTheme);
+    localStorage.setItem('diffstory-theme', newTheme);
+    // Swap icon: after toggling light→new moon, dark→new sun
+    var icon = document.querySelector('#theme-btn path');
+    if (icon) icon.setAttribute('d', newTheme === 'dark' ? sunPath : moonPath);
 }
 
 // Load saved theme
@@ -2044,7 +2103,9 @@ function toggleTheme() {
     var saved = localStorage.getItem('diffstory-theme');
     if (saved) {
         document.documentElement.setAttribute('data-theme', saved);
-        document.getElementById('theme-btn').textContent = saved === 'dark' ? '\\u{1F319}' : '\\u{1F31E}';
+        // Set initial icon
+        var icon = document.querySelector('#theme-btn path');
+        if (icon) icon.setAttribute('d', saved === 'dark' ? sunPath : moonPath);
     }
 })();
 

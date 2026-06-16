@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import webbrowser
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +15,7 @@ from diffstory.git_utils import (
     check_git_repo,
     get_diff,
     get_diff_with_renames,
+    get_git_root,
 )
 from diffstory.html_generator import generate_report
 
@@ -139,6 +141,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--diff",
         metavar="FILE",
         help="Generate report from a diff file directly (no git repository needed)",
+    )
+
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        default=False,
+        help="Do not open the report in a browser after generation",
     )
 
     parser.add_argument(
@@ -279,6 +288,16 @@ def _export_csv(files, output_path: Path) -> None:
     print(f"  CSV: {output_path}")
 
 
+def _open_in_browser(path: str) -> None:
+    """Open the generated report in the default browser."""
+    try:
+        file_url = "file://" + path
+        webbrowser.open(file_url)
+        print(f"  Opened in browser: {file_url}")
+    except Exception as e:
+        print(f"  Could not open browser: {e}", file=sys.stderr)
+
+
 def _read_diff_from_file(path: str) -> str:
     """Read diff content from a file."""
     try:
@@ -289,6 +308,31 @@ def _read_diff_from_file(path: str) -> str:
     except Exception as e:
         print(f"Error reading diff file: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def _resolve_output_path(given_path: str) -> str:
+    """Resolve the output file path.
+
+    If the given path is the default and we're inside a git repo,
+    place it in a 'stories/' directory outside the git working tree
+    so that git does not track it.
+    """
+    given = Path(given_path)
+    # Only redirect the default path — if the user explicitly passed -o, use as-is
+    if given.name != "diffstory-report.html":
+        return str(given.resolve())
+
+    try:
+        git_root = get_git_root()
+        if git_root:
+            git_root = Path(git_root).resolve()
+            stories_dir = git_root.parent / "stories"
+            stories_dir.mkdir(parents=True, exist_ok=True)
+            return str(stories_dir / given.name)
+    except Exception:
+        pass
+
+    return str(given.resolve())
 
 
 def main() -> None:
@@ -304,6 +348,9 @@ def main() -> None:
     if debug:
         verbose = True  # debug implies verbose
 
+    # Resolve output path — for the default, put it outside the git repo
+    output_path = _resolve_output_path(args.output)
+
     # Handle --diff flag (read diff from file, no git needed)
     if args.diff:
         if verbose:
@@ -317,9 +364,9 @@ def main() -> None:
             sys.exit(0)
         has_exports = args.json or args.md or args.csv
         if has_exports:
-            generate_exports(files, args.output, args.json, args.md, args.csv)
+            generate_exports(files, output_path, args.json, args.md, args.csv)
         try:
-            report_path = generate_report(files, output_path=args.output, repo_name="diff", verbose=verbose)
+            report_path = generate_report(files, output_path=output_path, repo_name="diff", verbose=verbose)
         except Exception as e:
             if debug:
                 import traceback
@@ -328,6 +375,10 @@ def main() -> None:
             sys.exit(1)
         print(f"\\n  HTML: {report_path}")
         print("  Report generated successfully!")
+
+        # Open in browser unless --no-open
+        if not args.no_open:
+            _open_in_browser(report_path)
         return
 
     # Validate Git repository
@@ -378,13 +429,13 @@ def main() -> None:
     # Generate exports if requested
     has_exports = args.json or args.md or args.csv
     if has_exports:
-        generate_exports(files, args.output, args.json, args.md, args.csv)
+        generate_exports(files, output_path, args.json, args.md, args.csv)
 
     # Always generate HTML report
     try:
         report_path = generate_report(
             files,
-            output_path=args.output,
+            output_path=output_path,
             staged=args.staged,
             commit_a=commit_a,
             commit_b=commit_b,
@@ -399,3 +450,7 @@ def main() -> None:
 
     print(f"\\n  HTML: {report_path}")
     print("  Report generated successfully!")
+
+    # Open in browser unless --no-open
+    if not args.no_open:
+        _open_in_browser(report_path)

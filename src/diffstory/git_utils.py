@@ -45,6 +45,14 @@ def check_git_repo(cwd: Optional[Path] = None) -> bool:
         return False
 
 
+def get_git_root(cwd: Optional[Path] = None) -> Optional[str]:
+    """Get the absolute path to the root of the Git repository."""
+    try:
+        return _run_git(["rev-parse", "--show-toplevel"], cwd=cwd).strip()
+    except GitError:
+        return None
+
+
 def get_diff(
     staged: bool = False,
     commit_a: Optional[str] = None,
