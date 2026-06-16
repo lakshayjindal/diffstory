@@ -116,10 +116,51 @@ fi
 
 # ---- 7. Commit version bump ----
 git add "$VERSION_FILE" "$PYPROJECT_FILE"
-git commit -m "Bump version to $new_version" 2>/dev/null || true
-ok "Version bump committed"
+# ---- 7. Commit version bump ----
+git add "$VERSION_FILE" "$PYPROJECT_FILE"
+
+if ! git diff --cached --quiet; then
+    git commit -m "Bump version to $new_version"
+    ok "Version bump committed"
+else
+    info "No version changes to commit"
+fi
 
 echo ""
 echo -e "${GREEN}All done!${NC} Version $new_version built and published."
 echo "  dist/:"
 ls -lh dist/
+
+# ---- 8. Push commit, tag and create GitHub Release ----
+if command -v gh >/dev/null 2>&1; then
+    info "Pushing commit to remote..."
+
+    current_branch=$(git branch --show-current)
+
+    git push origin "$current_branch" \
+        || err "Failed to push commit"
+
+    tag="v$new_version"
+
+    info "Creating git tag $tag..."
+
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        info "Tag $tag already exists locally"
+    else
+        git tag -a "$tag" -m "Release $tag"
+    fi
+
+    git push origin "$tag" \
+        || err "Failed to push tag"
+
+    info "Creating GitHub release..."
+
+    gh release create "$tag" \
+        dist/* \
+        --title "$tag" \
+        --notes "Release $tag"
+
+    ok "GitHub release created"
+else
+    info "Skipping GitHub release (gh CLI not installed)"
+fi

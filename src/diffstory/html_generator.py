@@ -174,8 +174,8 @@ def _render_sidebyside_hunk(hunk: Hunk, filepath: str, lexer_cache: dict) -> str
 
         rows += (
             '<div class="sbs-row">'
-            '<div class="sbs-left ' + left_class + '">' + left_content + '</div>'
-            '<div class="sbs-right ' + right_class + '">' + right_content + '</div>'
+            '<div class="sbs-left ' + left_class + ' diff-line" data-old="' + (str(left.old_lineno) if left and left.old_lineno else '') + '" data-new="' + (str(left.new_lineno) if left and left.new_lineno else '') + '">' + left_content + '</div>'
+            '<div class="sbs-right ' + right_class + ' diff-line" data-old="' + (str(right.old_lineno) if right and right.old_lineno else '') + '" data-new="' + (str(right.new_lineno) if right and right.new_lineno else '') + '">' + right_content + '</div>'
             '</div>\n'
         )
 
@@ -356,6 +356,8 @@ def _collect_blame_data(
     staged: bool = False,
     commit_a: Optional[str] = None,
     commit_b: Optional[str] = None,
+    verbose: bool = False,
+    progress_callback: Optional[callable] = None,
 ) -> dict:
     """Collect blame and commit metadata for all changed lines.
 
@@ -364,15 +366,12 @@ def _collect_blame_data(
       - commits: dict mapping commit_hash to commit metadata
 
     Handles renamed files by using the old path for deletion blame
-    and the new path for addition/context blame. Skips blame when
-    no revision info is available (e.g. --diff mode).
+    and the new path for addition/context blame. Falls back to
+    blaming the working tree when no revision info is available.
     """
-    # If no commit info at all, skip blame entirely (e.g. --diff mode)
-    if not staged and commit_a is None and commit_b is None:
-        return {"line_blame": {}, "commits": {}}
-
     line_blame: dict = {}
     all_commits: set = set()
+    blame_attempted = False
 
     for fi, file in enumerate(files):
         new_filepath = file.display_path
@@ -393,56 +392,109 @@ def _collect_blame_data(
             old_revision = commit_a
         elif staged:
             old_revision = "HEAD"
+        elif not commit_a and not commit_b:
+            # Working tree diff: blame deletions against HEAD so that
+            # old_lineno lookups correctly reference the committed version
+            old_revision = "HEAD"
+
+        # File exists — attempt blame. For working tree (all None), get_blame
+        # runs on the working tree. For --diff mode (no git repo), the per-file
+        # try/except catches the GitError gracefully.
+        blame_attempted = True
+
+        if verbose:
+            new_rev_str = str(new_revision) if new_revision else "working tree"
+            old_rev_str = str(old_revision) if old_revision else "working tree"
+            print(f"    Blaming {file.display_path} (new: {new_rev_str}, old: {old_rev_str})...")
 
         # Get blame for current (new) version — skip if file doesn't exist at revision
         blame_new: dict = {}
+        new_blame_ok = False
         if new_filepath != "/dev/null":
             try:
                 blame_new = get_blame_for_revision(new_filepath, revision=new_revision)
-            except Exception:
-                pass
+                new_blame_ok = True
+                if verbose:
+                    print(f"      Got {len(blame_new)} blame entries for new version")
+            except Exception as e:
+                if verbose:
+                    print(f"      Warning: could not get blame for {new_filepath} at {new_revision}: {e}")
 
-        # Get blame for old version if different from new (e.g. renames)
+        # Get blame for old version if different from new (e.g. renames, different revision)
         blame_old: dict = blame_new
+        old_blame_ok = new_blame_ok
         if old_revision and old_filepath != new_filepath:
             try:
                 blame_old = get_blame_for_revision(old_filepath, revision=old_revision)
-            except Exception:
+                old_blame_ok = True
+                if verbose:
+                    print(f"      Got {len(blame_old)} blame entries for old version (renamed path)")
+            except Exception as e:
                 blame_old = {}
+                old_blame_ok = False
+                if verbose:
+                    print(f"      Warning: could not get blame for {old_filepath} at {old_revision}: {e}")
         elif old_revision and old_filepath == new_filepath and old_revision != new_revision:
             # Same path but different revision — re-blame
             try:
                 blame_old = get_blame_for_revision(old_filepath, revision=old_revision)
-            except Exception:
-                pass
+                old_blame_ok = True
+                if verbose:
+                    print(f"      Got {len(blame_old)} blame entries for old version (different revision)")
+            except Exception as e:
+                old_blame_ok = new_blame_ok
+                if verbose:
+                    print(f"      Warning: could not get blame for {old_filepath} at {old_revision}: {e}")
 
         # Map blame by line number for additions and context
+        mapped_count = 0
         for hunk in file.hunks:
             for line in hunk.lines:
                 if line.line_type in ("addition", "context") and line.new_lineno:
-                    entry = blame_new.get(line.new_lineno)
+                    entry = blame_new.get(line.new_lineno) if new_blame_ok else None
                     if entry:
                         key = str(fi) + ":" + str(line.new_lineno)
                         line_blame[key] = entry
                         all_commits.add(entry["commit"])
+                        mapped_count += 1
 
                 elif line.line_type == "deletion" and line.old_lineno:
-                    if blame_old:
+                    if old_blame_ok:
                         entry = blame_old.get(line.old_lineno)
                         if entry:
                             key = str(fi) + ":" + str(line.old_lineno)
                             line_blame[key] = entry
                             all_commits.add(entry["commit"])
+                            mapped_count += 1
+
+        if verbose:
+            print(f"      Mapped {mapped_count} lines to blame data")
+
+        # Report progress after each file
+        if progress_callback is not None:
+            progress_callback(fi + 1, len(files), file.display_path)
 
     # Collect commit metadata for all unique commits
     commits: dict = {}
-    for chash in all_commits:
-        if chash and len(chash) == 40:
-            try:
-                info = get_commit_info(chash)
-                commits[chash] = info
-            except Exception:
-                pass
+    if blame_attempted and all_commits:
+        if verbose:
+            print(f"  Collecting metadata for {len(all_commits)} unique commits...")
+        for chash in all_commits:
+            if chash and len(chash) == 40:
+                try:
+                    info = get_commit_info(chash)
+                    commits[chash] = info
+                except Exception as e:
+                    if verbose:
+                        print(f"    Warning: could not get commit info for {chash[:8]}: {e}")
+
+    # Warn if blame was attempted but produced no data at all
+    if blame_attempted and not line_blame:
+        import sys as _sys
+        _sys.stderr.write(
+            "Warning: git blame could not collect data for any files. "
+            "Try --verbose for details.\n"
+        )
 
     return {
         "line_blame": line_blame,
@@ -479,6 +531,7 @@ def generate_report(
     commit_a: Optional[str] = None,
     commit_b: Optional[str] = None,
     verbose: bool = False,
+    progress_callback: Optional[callable] = None,
 ) -> str:
     """Generate a self-contained HTML report.
 
@@ -500,9 +553,19 @@ def generate_report(
 
     # Collect blame data
     try:
-        blame_data_dict = _collect_blame_data(files, staged=staged, commit_a=commit_a, commit_b=commit_b)
-    except Exception:
+        blame_data_dict = _collect_blame_data(
+            files, staged=staged, commit_a=commit_a, commit_b=commit_b, verbose=verbose,
+            progress_callback=progress_callback,
+        )
+    except Exception as e:
+        if verbose:
+            print(f"  Warning: blame collection failed: {e}")
         blame_data_dict = {"line_blame": {}, "commits": {}}
+
+    blame_line_count = len(blame_data_dict["line_blame"])
+    blame_commit_count = len(blame_data_dict["commits"])
+    if verbose:
+        print(f"  Blame data: {blame_line_count} lines mapped, {blame_commit_count} commits")
 
     stats = _compute_stats(files, blame_data=blame_data_dict["line_blame"], commits_data=blame_data_dict["commits"])
 

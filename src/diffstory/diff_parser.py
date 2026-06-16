@@ -199,13 +199,25 @@ def parse_diff(diff_text: str) -> list[DiffFile]:
 
 
 def _parse_diff_header(line: str) -> DiffFile:
-    """Parse 'diff --git a/path b/path' header."""
+    """Parse 'diff --git a/path b/path' header.
+
+    Git uses 'dev/null' (no leading slash) in the diff --git header
+    for added/deleted files. We normalize this to '/dev/null' to
+    match the convention used in ---/+++ lines and throughout the
+    rest of the codebase.
+    """
     # Extract paths after 'diff --git '
     rest = line[11:]
     parts = rest.split(" b/", 1)
     if len(parts) == 2:
         old_path = parts[0][2:] if parts[0].startswith("a/") else parts[0]
         new_path = parts[1]
+        # Git uses 'dev/null' (no leading slash) in the diff --git header.
+        # Normalize to '/dev/null' for consistency with our checks.
+        if old_path == "dev/null":
+            old_path = "/dev/null"
+        if new_path == "dev/null":
+            new_path = "/dev/null"
     else:
         old_path = rest
         new_path = rest

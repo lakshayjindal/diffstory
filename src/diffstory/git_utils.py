@@ -12,13 +12,53 @@ class GitError(Exception):
     """Raised when a git command fails."""
 
 
+# Cache the git repo root once discovered to avoid repeated rev-parse calls.
+# This is safe because the cwd doesn't change during a single diffstory run.
+_GIT_ROOT_CACHE: Optional[str] = None
+
+
+def _get_repo_root(cwd: Path) -> Optional[str]:
+    """Detect and cache the git repository root directory.
+
+    Returns None if cwd is not inside a git repository.
+    """
+    global _GIT_ROOT_CACHE
+    if _GIT_ROOT_CACHE is not None:
+        return _GIT_ROOT_CACHE
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        _GIT_ROOT_CACHE = result.stdout.strip()
+        return _GIT_ROOT_CACHE
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
 def _run_git(args: list[str], cwd: Optional[Path] = None) -> str:
     """Run a git command and return stdout.
+
+    Automatically resolves cwd to the git repository root so that all
+    git commands execute from the top-level directory. This is critical
+    because paths from git diff are always repo-relative, but git blame,
+    git log, etc. resolve paths relative to the current working directory.
+    Without this, running diffstory from a subdirectory would cause
+    "fatal: cannot stat path 'src/foo.py'" errors.
 
     Raises GitError on non-zero exit.
     """
     if cwd is None:
         cwd = Path.cwd()
+
+    # Resolve to repo root so that repo-relative paths (from diff output)
+    # work correctly with all git commands (blame, log, diff, etc.)
+    repo_root = _get_repo_root(cwd)
+    if repo_root is not None:
+        cwd = Path(repo_root)
 
     try:
         result = subprocess.run(
@@ -243,6 +283,9 @@ def get_commit_info(commit_hash: str, cwd: Optional[Path] = None) -> dict:
     Returns dict with: hash, author, author_email, author_date,
     committer, committer_email, committer_date, subject, body,
     parents, files_changed, insertions, deletions.
+
+    Handles root commits (no parent), merge commits, and
+    the all-zero hash (uncommitted/staged changes).
     """
     # Handle all-zero hash (uncommitted/staged changes)
     if all(c == "0" for c in commit_hash):
@@ -278,16 +321,49 @@ def get_commit_info(commit_hash: str, cwd: Optional[Path] = None) -> dict:
     if len(parts) < 9:
         return {"hash": commit_hash, "subject": "unknown"}
 
+    parents_list = parts[7].split() if parts[7] else []
+
     # Count files changed, insertions, deletions (skip for all-zero/uncommitted)
     files_changed = 0
     insertions = 0
     deletions = 0
     if not all(c == "0" for c in commit_hash):
         try:
-            stat_output = _run_git(
-                ["diff", "--stat", f"{commit_hash}~1..{commit_hash}", "--"],
-                cwd=cwd,
-            )
+            if parents_list:
+                # Has parents — use diff with first parent
+                parent_ref = parents_list[0]
+                stat_output = _run_git(
+                    ["diff", "--stat", f"{parent_ref}..{commit_hash}", "--"],
+                    cwd=cwd,
+                )
+            else:
+                # Root commit — count files via log --name-status
+                stat_output = _run_git(
+                    ["log", "-1", "--format=", "--name-status", commit_hash],
+                    cwd=cwd,
+                )
+                # Parse added files from root commit
+                for line in stat_output.strip().splitlines():
+                    if line.strip():
+                        files_changed += 1
+                        if line.startswith("A"):
+                            insertions += 1  # approximate
+                return {
+                    "hash": parts[0],
+                    "author": parts[1],
+                    "author_email": parts[2],
+                    "author_date": parts[3],
+                    "committer": parts[4],
+                    "committer_email": parts[5],
+                    "committer_date": parts[6],
+                    "parents": parents_list,
+                    "subject": parts[8],
+                    "body": body.strip(),
+                    "files_changed": files_changed,
+                    "insertions": insertions,
+                    "deletions": deletions,
+                }
+
             stat_lines = stat_output.strip().split("\n") if stat_output.strip() else []
             for line in stat_lines:
                 m = re.search(r"(\d+) file[s]? changed", line)
@@ -310,7 +386,7 @@ def get_commit_info(commit_hash: str, cwd: Optional[Path] = None) -> dict:
         "committer": parts[4],
         "committer_email": parts[5],
         "committer_date": parts[6],
-        "parents": parts[7].split() if parts[7] else [],
+        "parents": parents_list,
         "subject": parts[8],
         "body": body.strip(),
         "files_changed": files_changed,

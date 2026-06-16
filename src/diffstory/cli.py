@@ -13,11 +13,11 @@ from diffstory.diff_parser import parse_diff
 from diffstory.git_utils import (
     GitError,
     check_git_repo,
-    get_diff,
     get_diff_with_renames,
     get_git_root,
 )
 from diffstory.html_generator import generate_report
+from diffstory.loader import Spinner
 
 
 # ---------------------------------------------------------------------------
@@ -389,67 +389,65 @@ def main() -> None:
     # Parse revisions
     commit_a, commit_b, paths = _parse_revisions(args)
 
-    if verbose:
-        rev_desc = "staged" if args.staged else "working tree"
-        if commit_a and commit_b:
-            rev_desc = f"{commit_a}..{commit_b}"
-        elif commit_a:
-            rev_desc = commit_a
-        print(f"  Diff: {rev_desc}")
+    with Spinner() as spinner:
+        spinner.update("Fetching diff...")
+        try:
+            diff_text = get_diff_with_renames(
+                staged=args.staged,
+                commit_a=commit_a,
+                commit_b=commit_b,
+                paths=paths,
+            )
+        except GitError as e:
+            spinner.fail(f"Error fetching diff: {e}")
+            sys.exit(1)
 
-    try:
-        # Get diff
-        diff_text = get_diff_with_renames(
-            staged=args.staged,
-            commit_a=commit_a,
-            commit_b=commit_b,
-            paths=paths,
-        )
-    except GitError as e:
-        print(f"Error fetching diff: {e}", file=sys.stderr)
-        sys.exit(1)
+        if not diff_text.strip():
+            spinner.fail("No changes detected")
+            sys.exit(0)
 
-    if not diff_text.strip():
-        print("No changes detected.")
-        sys.exit(0)
+        spinner.update("Parsing diff...")
+        files = parse_diff(diff_text)
 
-    if verbose:
-        print(f"  Diff size: {len(diff_text)} bytes")
+        if not files:
+            spinner.fail("No parseable diff files found")
+            sys.exit(0)
 
-    # Parse diff
-    files = parse_diff(diff_text)
+        # Generate exports if requested
+        has_exports = args.json or args.md or args.csv
+        if has_exports:
+            generate_exports(files, output_path, args.json, args.md, args.csv)
 
-    if not files:
-        print("No parseable diff files found.")
-        sys.exit(0)
+        # Progress callback for per-file blame tracking
+        total_files = len(files)
 
-    if verbose:
-        print(f"  Files changed: {len(files)}")
+        def on_blame_progress(current, total, filepath):
+            spinner.update(
+                f"Blamed {current}/{total} files",
+                suffix=Path(filepath).name,
+            )
 
-    # Generate exports if requested
-    has_exports = args.json or args.md or args.csv
-    if has_exports:
-        generate_exports(files, output_path, args.json, args.md, args.csv)
+        spinner.update(f"Blaming {total_files} files...")
 
-    # Always generate HTML report
-    try:
-        report_path = generate_report(
-            files,
-            output_path=output_path,
-            staged=args.staged,
-            commit_a=commit_a,
-            commit_b=commit_b,
-            verbose=verbose,
-        )
-    except Exception as e:
-        if debug:
-            import traceback
-            traceback.print_exc()
-        print(f"Error generating report: {e}", file=sys.stderr)
-        sys.exit(1)
+        # Always generate HTML report
+        try:
+            report_path = generate_report(
+                files,
+                output_path=output_path,
+                staged=args.staged,
+                commit_a=commit_a,
+                commit_b=commit_b,
+                verbose=verbose,
+                progress_callback=on_blame_progress if total_files > 1 else None,
+            )
+        except Exception as e:
+            if debug:
+                import traceback
+                traceback.print_exc()
+            spinner.fail(f"Error generating report: {e}")
+            sys.exit(1)
 
-    print(f"\\n  HTML: {report_path}")
-    print("  Report generated successfully!")
+        spinner.succeed(f"Report saved to {Path(report_path).name}")
 
     # Open in browser unless --no-open
     if not args.no_open:
