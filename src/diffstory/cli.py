@@ -248,8 +248,16 @@ def main() -> None:
 
     # Always generate HTML report
     try:
-        report_path = generate_report(files, output_path=args.output)
+        report_path = generate_report(
+            files,
+            output_path=args.output,
+            staged=args.staged,
+            commit_a=commit_a,
+            commit_b=commit_b,
+        )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Error generating report: {e}", file=sys.stderr)
         sys.exit(1)
 

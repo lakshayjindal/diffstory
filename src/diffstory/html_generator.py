@@ -7,9 +7,11 @@ from datetime import datetime
 from html import escape
 from typing import Any, Optional
 
+import json
+
 from diffstory.diff_parser import DiffFile, DiffLine, Hunk, compute_word_diffs
 from diffstory.syntax import get_highlighted_line, get_syntax_styles
-from diffstory.git_utils import get_repo_name
+from diffstory.git_utils import get_blame_for_revision, get_commit_info, get_repo_name
 
 
 def _compute_stats(files: list[DiffFile]) -> dict:
@@ -297,6 +299,82 @@ def _build_stats_table(stats: dict) -> str:
             '<td>' + str(f["total"]) + '</td></tr>'
         )
     return rows
+
+
+def _collect_blame_data(
+    files: list[DiffFile],
+    staged: bool = False,
+    commit_a: Optional[str] = None,
+    commit_b: Optional[str] = None,
+) -> dict:
+    """Collect blame and commit metadata for all changed lines.
+
+    Returns a dict with:
+      - line_blame: dict mapping "file_idx:lineno" to blame entry
+      - commits: dict mapping commit_hash to commit metadata
+    """
+    line_blame: dict = {}
+    all_commits: set = set()
+
+    for fi, file in enumerate(files):
+        filepath = file.display_path
+        if filepath == "/dev/null":
+            continue
+
+        # Determine which revision to blame
+        new_revision = None  # None means working tree
+        if commit_b:
+            new_revision = commit_b
+        elif staged:
+            # For staged, blame working tree to capture staged additions
+            pass  # blame working tree
+
+        # Get blame for current (new) version
+        # TODO: handle renamed files — for renames, file.display_path is the new path
+        # but blame on the old revision needs the old path
+        blame_new = get_blame_for_revision(filepath, revision=new_revision)
+
+        # Map blame by new line number for additions and context
+        for hunk in file.hunks:
+            for line in hunk.lines:
+                if line.line_type in ("addition", "context") and line.new_lineno:
+                    entry = blame_new.get(line.new_lineno)
+                    if entry:
+                        key = str(fi) + ":" + str(line.new_lineno)
+                        line_blame[key] = entry
+                        all_commits.add(entry["commit"])
+
+                elif line.line_type == "deletion" and line.old_lineno:
+                    # For deletions, try to blame the old version of the file
+                    # commit_a is the old version being diffed
+                    old_revision = None
+                    if commit_a:
+                        old_revision = commit_a
+                    elif staged:
+                        old_revision = "HEAD"
+
+                    if old_revision:
+                        try:
+                            blame_old = get_blame_for_revision(filepath, revision=old_revision)
+                            entry = blame_old.get(line.old_lineno)
+                            if entry:
+                                key = str(fi) + ":" + str(line.old_lineno)
+                                line_blame[key] = entry
+                                all_commits.add(entry["commit"])
+                        except Exception:
+                            pass
+
+    # Collect commit metadata for all unique commits
+    commits: dict = {}
+    for chash in all_commits:
+        if chash and len(chash) == 40:
+            info = get_commit_info(chash)
+            commits[chash] = info
+
+    return {
+        "line_blame": line_blame,
+        "commits": commits,
+    }
 
 
 def generate_report(
