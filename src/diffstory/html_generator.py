@@ -14,8 +14,8 @@ from diffstory.syntax import get_highlighted_line, get_syntax_styles
 from diffstory.git_utils import get_blame_for_revision, get_commit_info, get_repo_name
 
 
-def _compute_stats(files: list[DiffFile]) -> dict:
-    """Compute summary statistics."""
+def _compute_stats(files: list[DiffFile], blame_data: Optional[dict] = None, commits_data: Optional[dict] = None) -> dict:
+    """Compute summary statistics, including blame-derived stats if available."""
     total_additions = 0
     total_deletions = 0
     total_files = len(files)
@@ -49,6 +49,30 @@ def _compute_stats(files: list[DiffFile]) -> dict:
 
     changed_lines_per_file.sort(key=lambda x: x["total"], reverse=True)
 
+    # Collect author breakdown from blame data
+    authors: dict = {}
+    unique_commits: set = set()
+    if blame_data:
+        for key, entry in blame_data.items():
+            auth = entry.get("author", "Unknown")
+            if auth not in authors:
+                authors[auth] = {"additions": 0, "deletions": 0, "commits": set()}
+            # Rough estimate: count lines per author
+            chash = entry.get("commit", "")
+            if chash:
+                unique_commits.add(chash)
+                authors[auth]["commits"].add(chash)
+
+    # If we have commit data, use it for richer stats
+    if commits_data:
+        for chash, info in commits_data.items():
+            unique_commits.add(chash)
+
+    author_breakdown = [
+        {"name": name, "commits": len(d["commits"])}
+        for name, d in sorted(authors.items(), key=lambda x: -len(x[1]["commits"]))
+    ]
+
     return {
         "files_changed": total_files,
         "additions": total_additions,
@@ -57,6 +81,9 @@ def _compute_stats(files: list[DiffFile]) -> dict:
         "deleted_files": deleted_files,
         "modified_files": modified_files,
         "renamed_files": renamed_files,
+        "authors": len(authors),
+        "commits": len(unique_commits),
+        "author_breakdown": author_breakdown[:10],
         "largest_files": changed_lines_per_file[:10],
     }
 
@@ -377,6 +404,27 @@ def _collect_blame_data(
     }
 
 
+def _collect_search_data(files: list[DiffFile], blame_data: dict, commits_data: dict) -> dict:
+    """Collect searchable data from files, blame, and commits for frontend search."""
+    file_names = [f.display_path for f in files]
+    author_names = set()
+    commit_subjects = []
+
+    for entry in blame_data.values():
+        if entry.get("author"):
+            author_names.add(entry["author"])
+
+    for info in commits_data.values():
+        if info.get("subject"):
+            commit_subjects.append(info["subject"])
+
+    return {
+        "files": file_names,
+        "authors": sorted(author_names),
+        "subjects": commit_subjects,
+    }
+
+
 def generate_report(
     files: list[DiffFile],
     output_path: str = "diffstory-report.html",
@@ -397,15 +445,19 @@ def generate_report(
     """
     from pathlib import Path
 
-    stats = _compute_stats(files)
     lexer_cache: dict = {}
     report_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Collect blame data
     try:
-        blame_data = _collect_blame_data(files, staged=staged, commit_a=commit_a, commit_b=commit_b)
+        blame_data_dict = _collect_blame_data(files, staged=staged, commit_a=commit_a, commit_b=commit_b)
     except Exception:
-        blame_data = {"line_blame": {}, "commits": {}}
+        blame_data_dict = {"line_blame": {}, "commits": {}}
+
+    stats = _compute_stats(files, blame_data=blame_data_dict["line_blame"], commits_data=blame_data_dict["commits"])
+
+    # Collect search data
+    search_data = _collect_search_data(files, blame_data_dict["line_blame"], blame_data_dict["commits"])
 
     # Render all file sections
     file_sections_html = ""
@@ -436,9 +488,36 @@ def generate_report(
     repo = repo_name or get_repo_name()
     stats_table = _build_stats_table(stats)
 
-    # Serialize blame data for embedding in HTML
-    blame_json = json.dumps(blame_data["line_blame"])
-    commits_json = json.dumps(blame_data["commits"])
+    # Compute file extensions for filter chips
+    all_extensions = sorted(set(
+        "." + f.display_path.rsplit(".", 1)[1].lower()
+        for f in files if "." in f.display_path
+    ))
+    change_types = sorted(set(f.status for f in files))
+
+    # Serialize data for embedding in HTML
+    blame_json = json.dumps(blame_data_dict["line_blame"])
+    commits_json = json.dumps(blame_data_dict["commits"])
+    search_json = json.dumps(search_data)
+
+    # Build extension filter buttons HTML
+    ext_filters_html = ""
+    for ext in all_extensions:
+        ext_filters_html += (
+            '<button class="filter-chip filter-ext" data-ext="' + ext + '" onclick="toggleFilterExt(\'' + ext + '\')">'
+            + ext + '</button>'
+        )
+
+    # Build change type filter buttons HTML
+    type_filters_html = ""
+    for ct in ["added", "deleted", "modified", "renamed"]:
+        if ct in change_types:
+            cls = "filter-chip filter-type filter-" + ct
+            label = ct.capitalize()
+            type_filters_html += (
+                '<button class="' + cls + '" data-type="' + ct + '" onclick="toggleFilterType(\'' + ct + '\')">'
+                + label + '</button>'
+            )
 
     html = _build_html_template(
         repo=repo,
@@ -449,6 +528,9 @@ def generate_report(
         file_sidebar_html=file_sidebar_items_html,
         blame_json=blame_json,
         commits_json=commits_json,
+        search_json=search_json,
+        ext_filters_html=ext_filters_html,
+        type_filters_html=type_filters_html,
     )
 
     output = Path(output_path)
@@ -465,6 +547,9 @@ def _build_html_template(
     file_sidebar_html: str,
     blame_json: str = "{}",
     commits_json: str = "{}",
+    search_json: str = "{}",
+    ext_filters_html: str = "",
+    type_filters_html: str = "",
 ) -> str:
     """Build the complete self-contained HTML document."""
     css = _get_css()
@@ -473,6 +558,11 @@ def _build_html_template(
 
     escaped_repo = escape(repo)
     escaped_time = escape(report_time)
+
+    # Build author breakdown HTML
+    author_html = ""
+    for a in stats.get("author_breakdown", []):
+        author_html += '<div class="stats-author"><span class="author-name">' + escape(a["name"]) + '</span><span class="author-commits">' + str(a["commits"]) + ' commits</span></div>'
 
     return (
         '<!DOCTYPE html>\n'
@@ -487,9 +577,10 @@ def _build_html_template(
         + '</style>\n'
         '</head>\n'
         '<body>\n'
-        '<!-- Embedded blame data -->\n'
+        '<!-- Embedded data -->\n'
         '<script id="diffstory-blame-data" type="application/json">' + blame_json + '</script>\n'
         '<script id="diffstory-commit-data" type="application/json">' + commits_json + '</script>\n'
+        '<script id="diffstory-search-data" type="application/json">' + search_json + '</script>\n'
         '<div id="app">\n'
         '    <header id="toolbar">\n'
         '        <div class="toolbar-left">\n'
@@ -497,16 +588,35 @@ def _build_html_template(
         '            <span class="toolbar-repo">' + escaped_repo + '</span>\n'
         '        </div>\n'
         '        <div class="toolbar-center">\n'
-        '            <button class="view-btn active" data-view="unified" onclick="switchView(\'unified\')" title="Unified View">Unified</button>\n'
-        '            <button class="view-btn" data-view="sidebyside" onclick="switchView(\'sidebyside\')" title="Side-by-Side View">Side-by-Side</button>\n'
-        '            <button class="view-btn" data-view="inline" onclick="switchView(\'inline\')" title="Inline Edit View">Inline</button>\n'
+        '            <button class="view-btn active" data-view="unified" onclick="switchView(\'unified\')" title="Unified View (U)">Unified</button>\n'
+        '            <button class="view-btn" data-view="sidebyside" onclick="switchView(\'sidebyside\')" title="Side-by-Side (S)">Side-by-Side</button>\n'
+        '            <button class="view-btn" data-view="inline" onclick="switchView(\'inline\')" title="Inline Edit (I)">Inline</button>\n'
         '        </div>\n'
         '        <div class="toolbar-right">\n'
+        '            <button class="tool-btn" onclick="focusSearch()" id="search-btn" title="Search (F or /)">\U0001f50d</button>\n'
         '            <button class="tool-btn" onclick="toggleTheme()" id="theme-btn" title="Toggle Theme (D)">\U0001f319</button>\n'
         '            <button class="tool-btn" onclick="toggleStats()" id="stats-btn" title="Statistics">\U0001f4ca</button>\n'
         '            <button class="tool-btn" onclick="toggleSidebar()" id="sidebar-btn" title="File List">\U0001f4c1</button>\n'
         '        </div>\n'
         '    </header>\n'
+        '    <!-- Global Search Bar -->\n'
+        '    <div id="search-bar" class="search-bar hidden">\n'
+        '        <input type="text" id="global-search" placeholder="Search files, authors, commits, code... (Esc to close)" oninput="doGlobalSearch()">\n'
+        '        <span id="search-count" class="search-count"></span>\n'
+        '        <button class="search-clear" onclick="clearGlobalSearch()">&times;</button>\n'
+        '    </div>\n'
+        '    <!-- Filter Bar -->\n'
+        '    <div id="filter-bar" class="filter-bar">\n'
+        '        <div class="filter-group">\n'
+        '            <span class="filter-label">Type:</span>\n'
+        + type_filters_html + '\n'
+        '        </div>\n'
+        '        <div class="filter-group">\n'
+        '            <span class="filter-label">Ext:</span>\n'
+        + ext_filters_html + '\n'
+        '        </div>\n'
+        '        <button class="filter-chip filter-clear" onclick="clearFilters()">Clear all</button>\n'
+        '    </div>\n'
         '    <div id="stats-panel" class="stats-panel hidden">\n'
         '        <div class="stats-header">\n'
         '            <h2>Statistics</h2>\n'
@@ -541,6 +651,14 @@ def _build_html_template(
         '                <div class="stat-value">' + str(stats["renamed_files"]) + '</div>\n'
         '                <div class="stat-label">Renamed</div>\n'
         '            </div>\n'
+        '            <div class="stat-card">\n'
+        '                <div class="stat-value">' + str(stats.get("authors", 0)) + '</div>\n'
+        '                <div class="stat-label">Authors</div>\n'
+        '            </div>\n'
+        '            <div class="stat-card">\n'
+        '                <div class="stat-value">' + str(stats.get("commits", 0)) + '</div>\n'
+        '                <div class="stat-label">Commits</div>\n'
+        '            </div>\n'
         '        </div>\n'
         '        <div class="stats-table-section">\n'
         '            <h3>Most Changed Files</h3>\n'
@@ -552,6 +670,10 @@ def _build_html_template(
         + stats_table + '\n'
         '                </tbody>\n'
         '            </table>\n'
+        '        </div>\n'
+        '        <div class="stats-table-section">\n'
+        '            <h3>Contributors</h3>\n'
+        '            <div class="stats-authors">' + author_html + '</div>\n'
         '        </div>\n'
         '    </div>\n'
         '    <!-- Tooltip -->\n'
@@ -579,6 +701,7 @@ def _build_html_template(
         '        <main id="diff-content" class="diff-content">\n'
         '            <div class="report-meta">\n'
         '                Generated on ' + escaped_time + '\n'
+        '                <span id="active-filters" class="active-filters"></span>\n'
         '            </div>\n'
         + file_sections_html + '\n'
         '        </main>\n'
@@ -1439,6 +1562,153 @@ body {
     pointer-events: none;
 }
 
+/* Search Bar */
+.search-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+}
+
+.search-bar.hidden {
+    display: none;
+}
+
+.search-bar input {
+    flex: 1;
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+
+.search-bar input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15);
+}
+
+.search-count {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.search-clear {
+    background: none;
+    border: none;
+    font-size: 18px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 4px;
+    line-height: 1;
+}
+
+.search-clear:hover {
+    background: var(--btn-hover);
+    color: var(--text);
+}
+
+/* Filter Bar */
+.filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.filter-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-right: 2px;
+}
+
+.filter-chip {
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-secondary);
+    border-radius: 12px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+
+.filter-chip:hover {
+    background: var(--btn-hover);
+    color: var(--text);
+}
+
+.filter-chip.active {
+    background: var(--accent);
+    color: #ffffff;
+    border-color: var(--accent);
+}
+
+.filter-chip.active.filter-added { background: var(--add-icon); border-color: var(--add-icon); }
+.filter-chip.active.filter-deleted { background: var(--del-icon); border-color: var(--del-icon); }
+.filter-chip.active.filter-modified { background: var(--accent); border-color: var(--accent); }
+.filter-chip.active.filter-renamed { background: var(--text-secondary); border-color: var(--text-secondary); }
+
+.filter-clear {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 3px 10px;
+    color: var(--del-icon);
+    border-color: var(--del-bg);
+    background: var(--del-bg);
+}
+
+.filter-clear:hover {
+    background: var(--del-bg);
+    color: var(--del-text);
+}
+
+/* Active filters display */
+.active-filters {
+    margin-left: 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* Hide filtered-out file sections */
+.file-section.hidden-by-search,
+.file-section.hidden-by-filter {
+    display: none;
+}
+
+/* Search match highlight */
+.search-match {
+    background: #ffd70044;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+[data-theme="dark"] .search-match {
+    background: #ffd70033;
+}
+
 /* Diff line hover cursor for blame */
 .diff-line {
     cursor: pointer;
@@ -1458,14 +1728,17 @@ body {
 def _get_javascript() -> str:
     """Get JavaScript for interactivity — blame tooltips, commit drawer, etc."""
     return """\
-// Load blame and commit data
+// Load blame, commit, and search data
 var blameData = {};
 var commitData = {};
+var searchData = {};
 try {
     var blameEl = document.getElementById('diffstory-blame-data');
     if (blameEl) blameData = JSON.parse(blameEl.textContent);
     var commitEl = document.getElementById('diffstory-commit-data');
     if (commitEl) commitData = JSON.parse(commitEl.textContent);
+    var searchEl = document.getElementById('diffstory-search-data');
+    if (searchEl) searchData = JSON.parse(searchEl.textContent);
 } catch(e) {}
 
 // Helper: format a timestamp as relative time
@@ -1498,7 +1771,6 @@ function shortHash(hash) {
 
 // Tooltip
 var tooltipEl = document.getElementById('tooltip');
-var tooltipCachedHtml = '';
 
 function getBlameKey(fileIdx, lineType, oldNo, newNo) {
     if (lineType === 'deletion' && oldNo) return fileIdx + ':' + oldNo;
@@ -1597,6 +1869,44 @@ function getFileIndex(lineEl) {
     return -1;
 }
 
+// Deep linking — scroll to file or line on page load
+function handleDeepLink() {
+    var hash = window.location.hash;
+    if (!hash) return;
+    hash = hash.substring(1); // remove #
+
+    if (hash.startsWith('file-')) {
+        setTimeout(function() {
+            scrollToFile(hash);
+        }, 100);
+    } else if (hash.startsWith('L-')) {
+        // #L-42 or #L-fileIdx-42
+        var parts = hash.substring(2).split('-');
+        if (parts.length === 2) {
+            var fileIdx = parseInt(parts[0]);
+            var lineNo = parseInt(parts[1]);
+            var section = document.getElementById('file-' + fileIdx);
+            if (section) {
+                scrollToFile('file-' + fileIdx);
+                // Try to find the line
+                setTimeout(function() {
+                    var lines = section.querySelectorAll('.diff-line');
+                    for (var i = 0; i < lines.length; i++) {
+                        var oldAttr = lines[i].getAttribute('data-old');
+                        var newAttr = lines[i].getAttribute('data-new');
+                        if (oldAttr == lineNo || newAttr == lineNo) {
+                            lines[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            lines[i].style.outline = '2px solid var(--accent)';
+                            setTimeout(function() { lines[i].style.outline = ''; }, 2000);
+                            break;
+                        }
+                    }
+                }, 200);
+            }
+        }
+    }
+}
+
 // Attach hover and click handlers to all diff lines
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.diff-line').forEach(function(el) {
@@ -1637,6 +1947,14 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     });
+
+    // Handle deep linking after all handlers are attached
+    handleDeepLink();
+});
+
+// Also handle hash changes dynamically
+window.addEventListener('hashchange', function() {
+    handleDeepLink();
 });
 
 // View Switching
@@ -1760,10 +2078,188 @@ function closeDrawer() {
     document.getElementById('drawer-overlay').classList.add('hidden');
 }
 
+// Global Search
+function focusSearch() {
+    var bar = document.getElementById('search-bar');
+    bar.classList.remove('hidden');
+    var input = document.getElementById('global-search');
+    input.focus();
+    input.select();
+}
+
+function doGlobalSearch() {
+    var query = document.getElementById('global-search').value.toLowerCase().trim();
+    var countEl = document.getElementById('search-count');
+    var matchedFiles = [];
+
+    document.querySelectorAll('.file-section').forEach(function(section) {
+        section.classList.remove('hidden-by-search');
+    });
+
+    if (!query) {
+        countEl.textContent = '';
+        document.querySelectorAll('.search-match').forEach(function(el) {
+            var parent = el.parentNode;
+            while (el.firstChild) parent.insertBefore(el.firstChild, el);
+            parent.removeChild(el);
+        });
+        return;
+    }
+
+    // Check each file section
+    document.querySelectorAll('.file-section').forEach(function(section) {
+        var fileName = section.dataset.file || '';
+        var fileIdx = parseInt(section.id.replace('file-', ''));
+        var match = false;
+
+        // Check file name
+        if (fileName.toLowerCase().includes(query)) match = true;
+
+        // Check authors from search data
+        if (!match && searchData.authors) {
+            for (var i = 0; i < searchData.authors.length; i++) {
+                if (searchData.authors[i].toLowerCase().includes(query)) { match = true; break; }
+            }
+        }
+
+        // Check commit subjects from search data
+        if (!match && searchData.subjects) {
+            for (var i = 0; i < searchData.subjects.length; i++) {
+                if (searchData.subjects[i].toLowerCase().includes(query)) { match = true; break; }
+            }
+        }
+
+        // Check code content in the diff lines
+        if (!match) {
+            var lines = section.querySelectorAll('.line-content');
+            for (var i = 0; i < lines.length; i++) {
+                if (lines[i].textContent.toLowerCase().includes(query)) {
+                    match = true;
+                    break;
+                }
+            }
+        }
+
+        if (match) {
+            matchedFiles.push(fileName);
+            section.classList.remove('hidden-by-search');
+        } else {
+            section.classList.add('hidden-by-search');
+        }
+    });
+
+    countEl.textContent = matchedFiles.length + ' file' + (matchedFiles.length !== 1 ? 's' : '') + ' match';
+}
+
+function clearGlobalSearch() {
+    document.getElementById('global-search').value = '';
+    document.getElementById('search-count').textContent = '';
+    document.querySelectorAll('.file-section').forEach(function(section) {
+        section.classList.remove('hidden-by-search');
+    });
+}
+
+// Filter Chips
+var activeExtFilters = [];
+var activeTypeFilters = [];
+
+function applyFilters() {
+    var hasExtFilter = activeExtFilters.length > 0;
+    var hasTypeFilter = activeTypeFilters.length > 0;
+
+    if (!hasExtFilter && !hasTypeFilter) {
+        document.querySelectorAll('.file-section').forEach(function(s) { s.classList.remove('hidden-by-filter'); });
+        document.getElementById('active-filters').textContent = '';
+        return;
+    }
+
+    var visibleCount = 0;
+    document.querySelectorAll('.file-section').forEach(function(section) {
+        var fileName = section.dataset.file || '';
+        var statusIcon = section.querySelector('.file-status-icon');
+        var hide = false;
+
+        if (hasExtFilter) {
+            var ext = '';
+            var dotIdx = fileName.lastIndexOf('.');
+            if (dotIdx >= 0) ext = fileName.substring(dotIdx).toLowerCase();
+            if (activeExtFilters.indexOf(ext) === -1) hide = true;
+        }
+
+        if (!hide && hasTypeFilter) {
+            var status = 'modified';
+            if (statusIcon) {
+                if (statusIcon.classList.contains('file-status-added')) status = 'added';
+                else if (statusIcon.classList.contains('file-status-deleted')) status = 'deleted';
+                else if (statusIcon.classList.contains('file-status-renamed')) status = 'renamed';
+            }
+            if (activeTypeFilters.indexOf(status) === -1) hide = true;
+        }
+
+        if (hide) {
+            section.classList.add('hidden-by-filter');
+        } else {
+            section.classList.remove('hidden-by-filter');
+            visibleCount++;
+        }
+    });
+
+    var label = '';
+    if (hasTypeFilter) label += activeTypeFilters.join(', ');
+    if (hasExtFilter) label += (label ? ' | ' : '') + activeExtFilters.join(', ');
+    document.getElementById('active-filters').textContent = label ? 'Filtered: ' + label : '';
+}
+
+function toggleFilterExt(ext) {
+    var btn = document.querySelector('.filter-ext[data-ext="' + ext + '"]');
+    var idx = activeExtFilters.indexOf(ext);
+    if (idx >= 0) {
+        activeExtFilters.splice(idx, 1);
+        btn.classList.remove('active');
+    } else {
+        activeExtFilters.push(ext);
+        btn.classList.add('active');
+    }
+    applyFilters();
+}
+
+function toggleFilterType(type) {
+    var btn = document.querySelector('.filter-type[data-type="' + type + '"]');
+    var idx = activeTypeFilters.indexOf(type);
+    if (idx >= 0) {
+        activeTypeFilters.splice(idx, 1);
+        btn.classList.remove('active');
+    } else {
+        activeTypeFilters.push(type);
+        btn.classList.add('active');
+    }
+    applyFilters();
+}
+
+function clearFilters() {
+    activeExtFilters = [];
+    activeTypeFilters = [];
+    document.querySelectorAll('.filter-chip').forEach(function(btn) { btn.classList.remove('active'); });
+    document.querySelectorAll('.file-section').forEach(function(s) { s.classList.remove('hidden-by-filter'); });
+    document.getElementById('active-filters').textContent = '';
+}
+
 // Keyboard Navigation
 document.addEventListener('keydown', function(e) {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    // Allow typing in inputs
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+        if (e.key === 'Escape') {
+            e.target.blur();
+            document.getElementById('search-bar').classList.add('hidden');
+            e.preventDefault();
+        }
+        return;
+    }
     switch (e.key) {
+        case 'j': case 'J': scrollToNextFile(1); e.preventDefault(); break;
+        case 'k': case 'K': scrollToNextFile(-1); e.preventDefault(); break;
+        case 'f': case 'F': focusSearch(); e.preventDefault(); break;
+        case '/': focusSearch(); e.preventDefault(); break;
         case 'd': case 'D': toggleTheme(); e.preventDefault(); break;
         case 'u': case 'U': switchView('unified'); e.preventDefault(); break;
         case 's': case 'S': switchView('sidebyside'); e.preventDefault(); break;
@@ -1771,6 +2267,9 @@ document.addEventListener('keydown', function(e) {
         case 'Escape':
             if (!document.getElementById('commit-drawer').classList.contains('hidden')) {
                 closeDrawer();
+            } else if (!document.getElementById('search-bar').classList.contains('hidden')) {
+                document.getElementById('search-bar').classList.add('hidden');
+                clearGlobalSearch();
             } else {
                 document.getElementById('stats-panel').classList.add('hidden');
             }
@@ -1778,6 +2277,46 @@ document.addEventListener('keydown', function(e) {
             break;
     }
 });
+
+// J/K Scroll to next/previous file
+function scrollToNextFile(direction) {
+    var sections = document.querySelectorAll('.file-section:not(.hidden-by-search):not(.hidden-by-filter)');
+    if (sections.length === 0) return;
+    var container = document.getElementById('diff-content');
+    var scrollTop = container.scrollTop;
+    var containerHeight = container.clientHeight;
+    var viewCenter = scrollTop + containerHeight / 2;
+
+    var bestIdx = -1;
+    if (direction > 0) {
+        // Find the first section whose top is below the view center
+        var minTop = Infinity;
+        for (var i = 0; i < sections.length; i++) {
+            var top = sections[i].offsetTop;
+            if (top > viewCenter + 10 && top < minTop) {
+                minTop = top;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx === -1) bestIdx = 0; // wrap to first
+    } else {
+        // Find the last section whose top is above the view center
+        var maxTop = -Infinity;
+        for (var i = 0; i < sections.length; i++) {
+            var top = sections[i].offsetTop;
+            if (top < viewCenter - 10 && top > maxTop) {
+                maxTop = top;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx === -1) bestIdx = sections.length - 1; // wrap to last
+    }
+
+    if (bestIdx >= 0) {
+        sections[bestIdx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        scrollToFile(sections[bestIdx].id);
+    }
+}
 
 // File Filtering
 function filterFiles() {

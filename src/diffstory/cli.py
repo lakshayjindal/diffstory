@@ -81,6 +81,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export diff stats as CSV",
     )
 
+    parser.add_argument(
+        "--diff",
+        metavar="FILE",
+        help="Generate report from a diff file directly (no git repository needed)",
+    )
+
     return parser
 
 
@@ -205,10 +211,43 @@ def _export_csv(files, output_path: Path) -> None:
     print(f"  CSV: {output_path}")
 
 
+def _read_diff_from_file(path: str) -> str:
+    """Read diff content from a file."""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"Error: Diff file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading diff file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main() -> None:
     """Main entry point for the diffstory CLI."""
     parser = build_parser()
     args = parser.parse_args()
+
+    # Handle --diff flag (read diff from file, no git needed)
+    if args.diff:
+        diff_text = _read_diff_from_file(args.diff)
+        commit_a = None
+        commit_b = None
+        files = parse_diff(diff_text)
+        if not files:
+            print("No parseable diff files found.")
+            sys.exit(0)
+        has_exports = args.json or args.md or args.csv
+        if has_exports:
+            generate_exports(files, args.output, args.json, args.md, args.csv)
+        try:
+            report_path = generate_report(files, output_path=args.output, repo_name="diff")
+        except Exception as e:
+            print(f"Error generating report: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"\\n  HTML: {report_path}")
+        print("  Report generated successfully!")
+        return
 
     # Validate Git repository
     if not check_git_repo():
