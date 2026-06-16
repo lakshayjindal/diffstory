@@ -18,6 +18,18 @@ from diffstory.git_utils import (
 )
 from diffstory.html_generator import generate_report
 from diffstory.loader import Spinner
+from diffstory.git_utils import (
+    get_hotspots,
+    get_change_timeline,
+    get_folder_stats,
+    get_dependency_files_for_diff,
+    scan_diff_for_todos,
+    map_related_tests,
+    get_complexity_delta,
+    get_commits_for_evolution,
+    compute_file_evolution,
+    compute_semantic_summary,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +153,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--diff",
         metavar="FILE",
         help="Generate report from a diff file directly (no git repository needed)",
+    )
+
+    parser.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        default=None,
+        help="Output directory for generated files (creates dir if not exists). "
+             "All report files go here; when combined with -o, uses the -o name as the stem.",
+    )
+
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        default=False,
+        help="Print a one-line summary suitable for CI pipelines and exit",
+    )
+
+    parser.add_argument(
+        "--review",
+        action="store_true",
+        default=False,
+        help="Enable review mode with per-file checkboxes and comment annotations",
     )
 
     parser.add_argument(
@@ -310,14 +344,22 @@ def _read_diff_from_file(path: str) -> str:
         sys.exit(1)
 
 
-def _resolve_output_path(given_path: str) -> str:
+def _resolve_output_path(given_path: str, output_dir: Optional[str] = None) -> str:
     """Resolve the output file path.
 
-    If the given path is the default and we're inside a git repo,
-    place it in a 'stories/' directory outside the git working tree
-    so that git does not track it.
+    Priority:
+      1. If --output-dir is given, place the file(s) in that directory.
+      2. If default path and inside a git repo, use 'stories/' outside the repo.
+      3. Otherwise use the given path as-is (resolved).
     """
     given = Path(given_path)
+
+    # If --output-dir is provided
+    if output_dir:
+        out_dir = Path(output_dir).expanduser().resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return str(out_dir / given.name)
+
     # Only redirect the default path — if the user explicitly passed -o, use as-is
     if given.name != "diffstory-report.html":
         return str(given.resolve())
@@ -335,6 +377,35 @@ def _resolve_output_path(given_path: str) -> str:
     return str(given.resolve())
 
 
+def _resolve_output_dir(output_dir: Optional[str], given_path: str) -> Optional[str]:
+    """Resolve the output directory path.
+
+    Returns the resolved output directory string or None if not set.
+    """
+    if output_dir:
+        out_dir = Path(output_dir).expanduser().resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return str(out_dir)
+    return None
+
+
+def _print_ci_summary(files, stats=None, hotspots=None) -> None:
+    """Print a one-line summary suitable for CI pipelines (--summary-only)."""
+    additions = sum(1 for f in files for h in f.hunks for l in h.lines if l.line_type == "addition")
+    deletions = sum(1 for f in files for h in f.hunks for l in h.lines if l.line_type == "deletion")
+    file_count = len(files)
+
+    risk_level = "Low"
+    if file_count > 15 or additions + deletions > 500:
+        risk_level = "High"
+    elif file_count > 8 or additions + deletions > 200:
+        risk_level = "Medium"
+
+    hotspot_count = len(hotspots[:3]) if hotspots else 0
+
+    print(f"Files Changed: {file_count} | LOC: +{additions}/-{deletions} | Risk: {risk_level} | Hotspots: {hotspot_count}")
+
+
 def main() -> None:
     """Main entry point for the diffstory CLI."""
     parser = build_parser()
@@ -348,8 +419,9 @@ def main() -> None:
     if debug:
         verbose = True  # debug implies verbose
 
-    # Resolve output path — for the default, put it outside the git repo
-    output_path = _resolve_output_path(args.output)
+    # Resolve output directory and path
+    output_dir_resolved = _resolve_output_dir(args.output_dir, args.output)
+    output_path = _resolve_output_path(args.output, output_dir=output_dir_resolved)
 
     # Handle --diff flag (read diff from file, no git needed)
     if args.diff:
@@ -362,11 +434,20 @@ def main() -> None:
         if not files:
             print("No parseable diff files found.")
             sys.exit(0)
+
+        # --summary-only mode
+        if args.summary_only:
+            _print_ci_summary(files)
+            return
+
         has_exports = args.json or args.md or args.csv
         if has_exports:
             generate_exports(files, output_path, args.json, args.md, args.csv)
         try:
-            report_path = generate_report(files, output_path=output_path, repo_name="diff", verbose=verbose)
+            report_path = generate_report(
+                files, output_path=output_path, repo_name="diff",
+                verbose=verbose, review_mode=args.review,
+            )
         except Exception as e:
             if debug:
                 import traceback
@@ -413,6 +494,52 @@ def main() -> None:
             spinner.fail("No parseable diff files found")
             sys.exit(0)
 
+        # Collect analytics data for reports
+        if verbose:
+            spinner.update("Gathering analytics...")
+
+        # Collect analytics data (protected from failures)
+        hotspots = []
+        timeline = {}
+        folder_stats = {}
+        deps = []
+        todos = []
+        test_impact = []
+        complexity = []
+        summaries = []
+        evolution_commits = []
+        evolution_files_data = {}
+
+        try:
+            hotspots = get_hotspots()
+            timeline = get_change_timeline()
+            folder_stats = get_folder_stats(files)
+            deps = get_dependency_files_for_diff(files)
+            todos = scan_diff_for_todos(diff_text)
+            test_impact = map_related_tests(files)
+            complexity = get_complexity_delta(files)
+            summaries = compute_semantic_summary(files)
+
+            # Commit evolution data
+            if commit_a is not None or commit_b is not None:
+                base = commit_a or "HEAD"
+                head = commit_b or "HEAD"
+                commits = get_commits_for_evolution(limit=20, base_commit=base, head_commit=head)
+                if commits:
+                    evolution_commits = commits
+                    for f in files[:3]:
+                        evo = compute_file_evolution(f.display_path, commits)
+                        if evo:
+                            evolution_files_data[f.display_path] = evo
+        except Exception as e:
+            if verbose:
+                print(f"  Analytics warning: {e}")
+
+        # --summary-only mode (CI badge)
+        if args.summary_only:
+            _print_ci_summary(files, hotspots=hotspots)
+            return
+
         # Generate exports if requested
         has_exports = args.json or args.md or args.csv
         if has_exports:
@@ -439,6 +566,17 @@ def main() -> None:
                 commit_b=commit_b,
                 verbose=verbose,
                 progress_callback=on_blame_progress if total_files > 1 else None,
+                review_mode=args.review,
+                hotspots=hotspots,
+                timeline=timeline,
+                folder_stats=folder_stats,
+                dependency_diffs=deps,
+                todos=todos,
+                test_impact=test_impact,
+                complexity_delta=complexity,
+                semantic_summaries=summaries,
+                evolution_commits=evolution_commits,
+                evolution_files=evolution_files_data,
             )
         except Exception as e:
             if debug:

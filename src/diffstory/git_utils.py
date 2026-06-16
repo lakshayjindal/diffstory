@@ -447,3 +447,451 @@ def get_repo_name(cwd: Optional[Path] = None) -> str:
     except GitError:
         pass
     return Path.cwd().name if cwd is None else cwd.name
+
+
+def get_hotspots(max_files: int = 20, cwd: Optional[Path] = None) -> list[dict]:
+    """
+    Identify hotspot files — files modified most frequently in recent history.
+
+    Runs `git log --name-only` over the last 500 commits and counts
+    how many times each file appears.
+
+    Returns a list of dicts sorted by modification count descending:
+        [{"file": "src/auth.py", "modifications": 47}, ...]
+    """
+    try:
+        output = _run_git(["log", "--max-count=500", "--format=", "--name-only", "--diff-filter=AM"], cwd=cwd)
+    except GitError:
+        return []
+
+    counts: dict[str, int] = {}
+    for line in output.splitlines():
+        line = line.strip()
+        if line and not line.startswith("commit"):
+            counts[line] = counts.get(line, 0) + 1
+
+    sorted_files = sorted(counts.items(), key=lambda x: -x[1])
+    return [{"file": f, "modifications": c} for f, c in sorted_files[:max_files]]
+
+
+def get_change_timeline(max_commits: int = 200, cwd: Optional[Path] = None) -> dict:
+    """
+    Get commit counts grouped by day of week for a change timeline chart.
+
+    Returns a dict with day names as keys and commit counts as values:
+        {"Mon": 5, "Tue": 12, "Wed": 8, "Thu": 15, "Fri": 3, "Sat": 1, "Sun": 0}
+    """
+    try:
+        output = _run_git(["log", f"--max-count={max_commits}", "--format=%ad", "--date=format:%a"], cwd=cwd)
+    except GitError:
+        return {}
+
+    day_order = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    counts: dict[str, int] = {d: 0 for d in day_order}
+
+    for line in output.splitlines():
+        line = line.strip()
+        if line in counts:
+            counts[line] += 1
+
+    max_count = max(counts.values()) if counts else 1
+    return {"days": day_order, "counts": [counts[d] for d in day_order], "max": max_count}
+
+
+def scan_diff_for_todos(diff_text: str) -> list[dict]:
+    """
+    Scan diff text for TODO, FIXME, HACK, XXX, BUG, OPTIMIZE annotations
+    that appear in added lines (prefixed with +).
+
+    Returns a list of dicts:
+        [{"file": "src/auth.py", "line": 42, "tag": "TODO", "text": "Remove temporary workaround"}]
+    """
+    import re
+    results: list[dict] = []
+    current_file = "unknown"
+    # Match + lines with TODO/FIXME/HACK/XXX/BUG/OPTIMIZE (with optional colon/space after)
+    pattern = re.compile(r"^\+.*?\b(TODO|FIXME|HACK|XXX|BUG|OPTIMIZE)\b[\s:]*\.?(.*)", re.IGNORECASE)
+
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            # Extract new file path
+            parts = line[11:].split(" b/", 1)
+            if len(parts) == 2:
+                current_file = parts[1]
+            continue
+        if line.startswith("+++"):
+            path = line[6:] if line.startswith("+++ b/") else ""
+            if path:
+                current_file = path
+            continue
+
+        match = pattern.match(line)
+        if match:
+            results.append({
+                "file": current_file,
+                "tag": match.group(1).upper(),
+                "text": match.group(2).strip(),
+            })
+
+    return results
+
+
+def get_dependency_files_for_diff(files: list, cwd: Optional[Path] = None) -> list[dict]:
+    """
+    Detect which of the changed files are dependency manifests
+    and try to parse added/removed dependencies.
+
+    Returns a list of dicts:
+        [{
+            "file": "requirements.txt",
+            "added": ["requests>=2.33"],
+            "removed": ["flask"],
+            "updated": [{"name": "django", "from": "5.2", "to": "5.3"}]
+        }]
+    """
+    DEPENDENCY_FILES = {
+        "requirements.txt": "pip",
+        "pyproject.toml": "pep621",
+        "Pipfile": "pipenv",
+        "Pipfile.lock": "pipenv-lock",
+        "package.json": "npm",
+        "yarn.lock": "yarn",
+        "pnpm-lock.yaml": "pnpm",
+        "Cargo.toml": "cargo",
+        "Cargo.lock": "cargo-lock",
+        "go.mod": "go",
+        "go.sum": "go-lock",
+        "Gemfile": "bundler",
+        "Gemfile.lock": "bundler-lock",
+        "composer.json": "composer",
+        "composer.lock": "composer-lock",
+        "build.gradle": "gradle",
+        "pom.xml": "maven",
+        "Makefile": "make",
+    }
+
+    import re
+    results: list[dict] = []
+
+    for f in files:
+        filename = Path(f.display_path).name
+        if filename not in DEPENDENCY_FILES:
+            continue
+
+        pkg_type = DEPENDENCY_FILES[filename]
+        dep_info = {"file": f.display_path, "type": pkg_type, "added": [], "removed": [], "updated": []}
+
+        # Get the diff content for this file from hunks
+        added_lines: list[str] = []
+        removed_lines: list[str] = []
+        for hunk in f.hunks:
+            for line in hunk.lines:
+                if line.line_type == "addition":
+                    added_lines.append(line.content)
+                elif line.line_type == "deletion":
+                    removed_lines.append(line.content)
+
+        # Parse based on file type
+        if filename == "requirements.txt":
+            dep_info["added"] = [l.strip() for l in added_lines if l.strip() and not l.startswith("#") and not l.startswith("-r")]
+            dep_info["removed"] = [l.strip() for l in removed_lines if l.strip() and not l.startswith("#")]
+            # Detect updates
+            added_names = {_extract_pip_package(l) for l in dep_info["added"]}
+            removed_names = {_extract_pip_package(l) for l in dep_info["removed"]}
+            overlap = added_names & removed_names
+            for name in overlap:
+                old_ver = next((l for l in dep_info["removed"] if l.startswith(name)), "")
+                new_ver = next((l for l in dep_info["added"] if l.startswith(name)), "")
+                dep_info["updated"].append({"name": name, "from": old_ver, "to": new_ver})
+            # Don't list updates in added/removed
+            updated_names = {u["name"] for u in dep_info["updated"]}
+            dep_info["added"] = [a for a in dep_info["added"] if _extract_pip_package(a) not in updated_names]
+            dep_info["removed"] = [r for r in dep_info["removed"] if _extract_pip_package(r) not in updated_names]
+
+        elif filename == "package.json":
+            dep_info["added"] = added_lines
+            dep_info["removed"] = removed_lines
+
+        elif filename == "Cargo.toml":
+            dep_info["added"] = [l.strip() for l in added_lines if "=" in l and not l.strip().startswith("[")]
+            dep_info["removed"] = [l.strip() for l in removed_lines if "=" in l and not l.strip().startswith("[")]
+
+        elif filename == "go.mod":
+            dep_info["added"] = [l.strip() for l in added_lines if l.strip() and not l.startswith("module ") and not l.startswith("go ")]
+            dep_info["removed"] = [l.strip() for l in removed_lines if l.strip() and not l.startswith("module ") and not l.startswith("go ")]
+
+        elif filename == "pyproject.toml":
+            dep_info["added"] = [l.strip() for l in added_lines if "=" in l and not l.strip().startswith("[")]
+            dep_info["removed"] = [l.strip() for l in removed_lines if "=" in l and not l.strip().startswith("[")]
+
+        results.append(dep_info)
+
+    return results
+
+
+def _extract_pip_package(line: str) -> str:
+    """Extract the package name from a pip-style requirements line."""
+    import re
+    # Handle: package==1.0, package>=1.0, package~=1.0, package!=1.0, package
+    m = re.match(r"^([a-zA-Z0-9._-]+)", line)
+    return m.group(1) if m else line
+
+
+def get_folder_stats(files: list) -> dict:
+    """
+    Group changed files by folder and compute change counts per folder.
+
+    Returns a dict:
+        {"backend/": {"changes": 47, "additions": 30, "deletions": 17},
+         "frontend/": {"changes": 12, "additions": 8, "deletions": 4}}
+    """
+    folders: dict[str, dict] = {}
+
+    for f in files:
+        path = f.display_path
+        parts = path.split("/")
+        if len(parts) > 1:
+            folder = parts[0] + "/"
+        else:
+            folder = "/"  # root
+
+        adds = sum(1 for h in f.hunks for l in h.lines if l.line_type == "addition")
+        dels = sum(1 for h in f.hunks for l in h.lines if l.line_type == "deletion")
+
+        if folder not in folders:
+            folders[folder] = {"changes": 0, "additions": 0, "deletions": 0}
+        folders[folder]["changes"] += 1
+        folders[folder]["additions"] += adds
+        folders[folder]["deletions"] += dels
+
+    return folders
+
+
+def map_related_tests(files: list) -> list[dict]:
+    """
+    Map changed files to their likely test files using path heuristics.
+
+    Heuristics:
+      - src/auth/auth.py → tests/auth/test_auth.py, tests/test_auth.py
+      - app/models/user.py → tests/models/test_user.py, tests/test_user.py
+      - foo.py → test_foo.py, tests/test_foo.py
+      - src/foo/bar.py → tests/foo/test_bar.py
+
+    Returns a list of dicts:
+        [{"source": "src/auth.py", "tests": ["tests/test_auth.py", "tests/test_login.py"]}]
+    """
+    results: list[dict] = []
+
+    for f in files:
+        path = f.display_path
+        basename = Path(path).stem if "." in path else path
+        parent = str(Path(path).parent) if "/" in path else ""
+
+        # Build test file candidates
+        candidates = set()
+        candidates.add(f"test_{basename}.py")
+        candidates.add(f"tests/test_{basename}.py")
+
+        # Mirror the source path under tests/
+        if parent and parent != ".":
+            candidates.add(f"tests/{parent}/test_{basename}.py")
+
+            # Also try without src/ prefix
+            if parent.startswith("src/"):
+                sub = parent[4:]
+                candidates.add(f"tests/{sub}/test_{basename}.py")
+                candidates.add(f"tests/test_{basename}.py")
+
+        results.append({
+            "source": path,
+            "tests": sorted(candidates),
+        })
+
+    return results
+
+
+def get_complexity_delta(files: list, cwd: Optional[Path] = None) -> list[dict]:
+    """
+    Compute function complexity delta for Python files using the `ast` module.
+
+    For each changed .py file, parse the old and new content (if available)
+    and count function bodies (def/async def, class methods).
+
+    Returns a list of dicts:
+        [{"file": "src/auth.py", "functions": [{"name": "login", "old_lines": 7, "new_lines": 14}], ...}]
+    """
+    results: list[dict] = []
+
+    for f in files:
+        if not f.display_path.endswith(".py"):
+            continue
+
+        # We can estimate complexity from the diff itself
+        func_changes: list[dict] = []
+        current_func = None
+
+        for hunk in f.hunks:
+            for line in hunk.lines:
+                content = line.content.strip()
+                # Detect function/method definitions
+                if content.startswith("def ") or content.startswith("async def "):
+                    func_name = content.split("(")[0].replace("def ", "").replace("async def ", "").strip()
+                    if func_name:
+                        if current_func:
+                            func_changes.append(current_func)
+                        current_func = {"name": func_name, "old_lines": 0, "new_lines": 0, "old_complexity": 0, "new_complexity": 0}
+
+                if current_func:
+                    if line.line_type == "addition":
+                        current_func["new_lines"] += 1
+                    elif line.line_type == "deletion":
+                        current_func["old_lines"] += 1
+                    elif line.line_type == "context":
+                        current_func["old_lines"] += 1
+                        current_func["new_lines"] += 1
+
+            if current_func:
+                func_changes.append(current_func)
+                current_func = None
+
+        if func_changes:
+            results.append({"file": f.display_path, "functions": func_changes})
+
+    return results
+
+
+def get_file_content_at_commit(filepath: str, commit: str, cwd: Optional[Path] = None) -> str:
+    """Get the full content of a file at a specific commit."""
+    try:
+        return _run_git(["show", f"{commit}:{filepath}"], cwd=cwd)
+    except GitError:
+        return ""
+
+
+def get_commits_for_evolution(limit: int = 10, base_commit: Optional[str] = None, head_commit: Optional[str] = None, cwd: Optional[Path] = None) -> list[dict]:
+    """
+    Get a list of commits for the commit evolution slider.
+
+    Returns a list of dicts:
+        [{"hash": "abc123", "subject": "Fix bug", "author": "Lakshay", "date": "..."}]
+    """
+    try:
+        if base_commit and head_commit:
+            output = _run_git(
+                ["log", "--reverse", f"--max-count={limit}", "--format=%H|%an|%ae|%ai|%s", f"{base_commit}..{head_commit}"],
+                cwd=cwd,
+            )
+        else:
+            output = _run_git(["log", "--reverse", f"--max-count={limit}", "--format=%H|%an|%ae|%ai|%s"], cwd=cwd)
+    except GitError:
+        return []
+
+    commits: list[dict] = []
+    for line in output.strip().splitlines():
+        parts = line.split("|", 4)
+        if len(parts) == 5:
+            commits.append({
+                "hash": parts[0],
+                "author": parts[1],
+                "author_email": parts[2],
+                "date": parts[3],
+                "subject": parts[4],
+            })
+    return commits
+
+
+def get_commit_range_files(base_commit: str, head_commit: str, cwd: Optional[Path] = None) -> list[str]:
+    """Get the list of files changed between two commits."""
+    try:
+        output = _run_git(["diff", "--name-only", f"{base_commit}..{head_commit}"], cwd=cwd)
+    except GitError:
+        return []
+    return [l.strip() for l in output.splitlines() if l.strip()]
+
+
+def compute_file_evolution(filepath: str, commits: list[dict], cwd: Optional[Path] = None) -> list[dict]:
+    """
+    For a given file, fetch its content at each commit in the range.
+
+    Returns a list of dicts with commit info and file content:
+        [{"commit": {...}, "content": "...", "exists": True}]
+    """
+    evolution: list[dict] = []
+    for commit in commits:
+        content = get_file_content_at_commit(filepath, commit["hash"], cwd=cwd)
+        evolution.append({
+            "commit": commit,
+            "content": content,
+            "exists": bool(content),
+        })
+    return evolution
+
+
+def compute_semantic_summary(files: list, commits_data: Optional[dict] = None) -> list[str]:
+    """
+    Generate a deterministic semantic summary from filenames, commit messages,
+    and hunk headers. No AI involved.
+
+    Returns a list of summary strings:
+        ["Added authentication checks.", "Refactored invoice calculation."]
+    """
+    summaries: list[str] = []
+    seen: set[str] = set()
+
+    # From commit messages
+    if commits_data:
+        for chash, info in commits_data.items():
+            subject = info.get("subject", "")
+            if subject and subject not in seen:
+                # Clean up common prefixes for natural reading
+                cleaned = subject
+                for prefix in ["feat: ", "fix: ", "chore: ", "refactor: ", "docs: ", "test: "]:
+                    if cleaned.lower().startswith(prefix):
+                        cleaned = cleaned[len(prefix):]
+                        break
+                summary = cleaned[0].upper() + cleaned[1:] if cleaned else cleaned
+                summaries.append(f"{summary}." if not summary.endswith(".") else summary)
+                seen.add(subject)
+
+    # From file names (for files without commit messages)
+    seen_files: set[str] = set()
+    for f in files:
+        path = f.display_path
+        if path in seen_files:
+            continue
+        seen_files.add(path)
+
+        basename = Path(path).stem
+        parent = Path(path).parent
+        status = f.status
+
+        # Generate summary from file name
+        readable = basename.replace("_", " ").replace("-", " ").title()
+
+        if status == "added":
+            summary = f"Added {readable}."
+        elif status == "deleted":
+            summary = f"Removed {readable}."
+        elif status == "renamed":
+            summary = f"Renamed {readable}."
+        else:
+            summary = f"Updated {readable}."
+
+        if summary not in seen:
+            summaries.append(summary)
+            seen.add(summary)
+
+    # From hunk headers
+    for f in files:
+        for hunk in f.hunks:
+            if hunk.header:
+                header_text = hunk.header.strip()
+                # Filter out generic headers
+                if header_text and not header_text.startswith("@@"):
+                    summary = header_text[0].upper() + header_text[1:] if header_text else header_text
+                    summary = summary.rstrip(".") + "."
+                    if summary not in seen:
+                        summaries.append(summary)
+                        seen.add(summary)
+
+    return summaries[:15]  # Limit to 15 summaries

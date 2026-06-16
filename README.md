@@ -76,6 +76,37 @@ Alongside the HTML report, export structured data:
 diffstory --staged --json --md --csv
 ```
 
+### Analytics & Insights
+
+Every report now includes rich analytics computed from git history:
+
+- **🔥 Hotspots** — Files modified most frequently in recent history
+- **⚠ Risk Analysis** — Heuristic risk scoring based on LOC, files touched, core modules, and hotspots
+- **👤 Ownership Analysis** — Top contributor per file with suggested reviewer
+- **📈 Change Timeline** — Commit distribution by day of week
+- **📝 Semantic Summary** — Deterministic summary from filenames and commit messages
+- **📦 Dependency Diff** — Auto-detects changes to `requirements.txt`, `package.json`, `Cargo.toml`, `go.mod`, etc.
+- **📌 TODO/FIXME Detection** — Scans added lines for annotations
+- **🧪 Test Impact** — Maps changed files to their likely test files
+- **📂 Folder Heatmap** — Change distribution across directories
+- **🔬 Complexity Delta** — Function-size changes in Python files
+- **⏳ Commit Evolution** — Slider to scrub through commits in a range
+- **✅ Review Mode** — Per-file checkboxes with localStorage persistence (`--review`)
+
+### CI Badge Mode
+
+```bash
+diffstory HEAD~1 HEAD --summary-only
+# Files Changed: 14 | LOC: +233/-98 | Risk: Medium | Hotspots: 3
+```
+
+### Output Directory
+
+```bash
+diffstory --output-dir reviews/
+diffstory --output-dir reviews/ -o sprint-17
+```
+
 ---
 
 ## Installation
