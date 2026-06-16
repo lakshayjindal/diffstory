@@ -19,6 +19,7 @@ build/
 !/README.md
 !/requirements.md
 !/PHASE2_CONTEXT.md
+!/Documentation.md
 
 # Editor files
 .vscode/
