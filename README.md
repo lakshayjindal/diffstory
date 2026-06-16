@@ -2,136 +2,158 @@
 
 **Transform Git diffs into rich, interactive, self-contained HTML reports.**
 
-DiffStory turns any `git diff` into a beautiful, portable HTML report that answers not just *what* changed, but *who* changed it, *when*, and *why* — all offline, in a single file.
+DiffStory turns any `git diff` into a beautiful, portable HTML report that answers not just *what* changed, but *who* changed it, *when*, and *why* — all offline, in a single file you can share, archive, or email.
 
 ```bash
 pip install diffstory
 cd my-repo
-diffstory --staged -o report.html
-# Open report.html in any browser
+diffstory --staged -o review.html
+# Open review.html in any browser — zero setup required
 ```
 
 ---
 
 ## Features
 
-### Phase 1 (MVP)
-- **Unified View** — Classic git-style diff with syntax highlighting
-- **Side-by-Side View** — Original and modified columns, synchronized
-- **Inline Edit View** — Word-level diff showing exact token changes
-- **Syntax Highlighting** — 30+ languages via Pygments, light + dark themes
-- **Statistics Dashboard** — Files changed, +/-, authors breakdown
-- **File Sidebar** — Navigate files with search, collapse/expand
-- **Keyboard Shortcuts** — `U`/`S`/`I` to switch views, `D` for theme, `Esc` to close
-- **Theme Toggle** — Light/dark with system preference detection and persistence
-- **Export Formats** — HTML, JSON, Markdown, CSV
+### Three Diff Views
 
-### Phase 2 (Blame Integration)
-- **Blame Tooltips** — Hover any changed line to see author, commit, date, and message
-- **Commit Drawer** — Click a line to open a detailed side panel with full commit metadata
-- **Relative Time** — "2h ago", "3d ago" for at-a-glance recency
+| View | Description |
+|---|---|
+| **Unified** | Classic git-style diff with line numbers and syntax highlighting |
+| **Side-by-Side** | Original (left) and modified (right) columns, visually aligned |
+| **Inline Edit** | Word-level diff — shows exact token changes inline, green additions and red strikethrough removals. No more mental diffing. |
 
-### Future Phases
-- Search across filename, author, commit message, and code content
-- Filtering by author, date range, file type, change type
-- Commit evolution viewer and timeline
-- Deep linking to specific lines and files
+Switch between views instantly with the toolbar or keyboard shortcuts — no regeneration needed.
+
+### Blame & Provenance
+
+Every changed line carries its history. **Hover** any line to see a tooltip with author name, commit hash, subject, date, and relative time (e.g. "2h ago"). **Click** any line to open the commit drawer — a side panel with full metadata: commit body, author, committer, parents, files changed, insertions, and deletions.
+
+### Search & Filtering
+
+- **Global search** — find files by name, author, commit subject, or code content with live results
+- **Filter chips** — narrow the view by file extension (`.py`, `.js`, `.html`, etc.) or change type (added, deleted, modified, renamed)
+- **File sidebar** — searchable file list with add/delete indicators and collapse/expand
+
+### Statistics Dashboard
+
+A floating panel showing:
+- Files changed, additions, deletions
+- Added / deleted / modified / renamed file counts
+- Author count and commit count (from blame)
+- Contributor breakdown with commit counts
+- Top 10 most-changed files
+
+### Keyboard Navigation
+
+| Key | Action |
+|---|---|
+| `J` / `K` | Next / previous file |
+| `F` or `/` | Focus global search |
+| `U` / `S` / `I` | Unified / Side-by-side / Inline view |
+| `D` | Toggle light/dark theme |
+| `Esc` | Close drawer → close search → close stats |
+
+### Deep Linking
+
+Link directly to specific files and lines: `#file-0` scrolls to the first file, `#L-0-42` scrolls to line 42 in the first file. Shareable, stable anchors.
+
+### Binary File Support
+
+Binary files are detected and displayed with meaningful placeholders — image files get a preview icon, other binaries show metadata — preventing crashes and keeping the report clean.
+
+### Customization
+
+- **Light/Dark themes** — toggle instantly, persists across sessions
+- **Config file** — `~/.diffstory.toml` or `.diffstory.toml` in your project sets defaults for verbose mode, debug output, and more
+- **`--verbose` / `--debug` flags** — see what's happening under the hood
+
+### Export Formats
+
+Alongside the HTML report, export structured data:
+
+```bash
+diffstory --staged --json --md --csv
+```
 
 ---
 
 ## Installation
 
-### From PyPI (once published)
 ```bash
 pip install diffstory
 ```
 
-### From source
+**Requires:** Python 3.10+ and Git.
+
+To install from source:
+
 ```bash
-git clone https://github.com/user/diffstory.git
+git clone https://github.com/lakshayjindal/diffstory.git
 cd diffstory
 pip install -e .
 ```
-
-**Requirements:** Python 3.10+, Git
 
 ---
 
 ## Usage
 
-### Basic Commands
-
 ```bash
 # Working tree diff
 diffstory
 
-# Staged changes
+# Staged changes (what will be committed)
 diffstory --staged
 
 # Compare commits
 diffstory HEAD~3 HEAD
 
 # Compare branches
-diffstory main feature
+diffstory main feature-branch
+
+# Compare revisions with path restriction
+diffstory HEAD~3 HEAD src/
+
+# Generate from a diff file directly (no git repo needed)
+diffstory --diff /path/to/patch.diff
 
 # Custom output file
-diffstory -o my-report.html
+diffstory -o my-review.html
 
-# Multiple export formats
-diffstory --staged --json --md --csv -o report
+# Multiple export formats at once
+diffstory --staged --json --md --csv -o release-v2.0
+
+# Verbose mode
+diffstory --staged --verbose
+
+# Show version
+diffstory --version
 ```
 
-### Keyboard Shortcuts (in the HTML report)
+### Config File Example
 
-| Key | Action |
-|---|---|
-| `U` | Unified view |
-| `S` | Side-by-side view |
-| `I` | Inline edit view |
-| `D` | Toggle theme |
-| `Esc` | Close drawer / stats panel |
-| `F` | Focus file search |
+Create `~/.diffstory.toml` or `.diffstory.toml` in your project:
 
----
-
-## Report Features
-
-### Three View Modes
-
-| Mode | Description |
-|---|---|
-| **Unified** | Classic git diff format with line numbers |
-| **Side-by-Side** | Two-column layout — original on left, modified on right |
-| **Inline Edit** | Word-level diff showing additions (green) and removals (red strikethrough) within the same line |
-
-### Blame Tooltips (Phase 2)
-
-Hover over any changed line to see:
-- **Author** name
-- **Commit hash** (short, 7 chars)
-- **Commit subject**
-- **Date** with relative time ("2h ago")
-
-Click any line to open the **Commit Drawer** with full metadata: body, committer, parents, files changed, insertions/deletions.
-
-### Statistics
-
-The statistics panel shows:
-- Files changed, additions, deletions
-- Added / deleted / modified / renamed file counts
-- Top 10 most-changed files with per-file breakdown
+```toml
+[cli]
+verbose = true
+debug = false
+```
 
 ---
 
-## Output
+## HTML Report
 
-Reports are fully self-contained single HTML files:
-- All CSS inlined
-- All JavaScript inlined
-- All data embedded as JSON
-- No external dependencies
+Every generated HTML report is **fully self-contained**:
+
+- All CSS inlined — no external stylesheets
+- All JavaScript inlined — no external scripts
+- All data (blame, commits, search index) embedded as JSON
 - Works offline in any modern browser
-- Safe to email or archive
+- Safe to email, archive, or include in audit evidence
+- Zero external dependencies at runtime
+
+Open it, share it, attach it to a PR, or file it for compliance. It just works.
 
 ---
 
@@ -139,15 +161,17 @@ Reports are fully self-contained single HTML files:
 
 ```
 diffstory/
-├── pyproject.toml              # Build config & entry point
-├── requirements.md             # Full product requirements
-├── .gitignore
+├── pyproject.toml              # Build config & CLI entry point
+├── README.md
+├── requirements.md             # Full product requirements & spec
+├── deploy.sh                   # Build & publish script
+├── .github/workflows/publish.yml  # CI/CD for PyPI publishing
 ├── src/diffstory/
 │   ├── __init__.py             # Package version
-│   ├── __main__.py             # python -m diffstory
+│   ├── __main__.py             # python -m diffstory support
 │   ├── cli.py                  # CLI argument parsing & orchestration
-│   ├── git_utils.py            # Git subprocess wrappers
-│   ├── diff_parser.py          # Unified diff → structured data
+│   ├── git_utils.py            # Git subprocess wrappers (diff, blame, log)
+│   ├── diff_parser.py          # Unified diff parser → structured data
 │   ├── syntax.py               # Pygments syntax highlighting
 │   └── html_generator.py       # Self-contained HTML report generation
 └── tests/
@@ -162,26 +186,37 @@ diffstory/
 # Install in editable mode
 pip install -e .
 
-# Run against a test repo
-cd /tmp && mkdir test && cd test
-git init
-echo "hello" > test.py
-git add -A && git commit -m "init"
+# Test with a quick repo
+cd /tmp && mkdir test-diffstory && cd test-diffstory
+git init && echo "hello" > test.py && git add -A && git commit -m "init"
 echo "world" >> test.py
-diffstory
+diffstory --staged
+
+# Build the package
+python -m build
+
+# Deploy (version bump, build, publish)
+./deploy.sh           # patch bump
+./deploy.sh minor     # minor bump
 ```
 
 ---
 
-## Security
+## Design Philosophy
 
-DiffStory is designed for air-gapped, audit-safe use:
-- Never uploads code
-- Never transmits data
-- No telemetry
-- No accounts required
-- No external API calls
+DiffStory was built to answer five questions about every changed line:
+
+> **What changed? Who changed it? When? Why? How did it evolve?**
+
+It consolidates `git diff`, `git blame`, `git log`, and GitHub-style review UX into a single, portable artifact — no server, no accounts, no data leaving your machine.
+
+### Security
+
+- Never uploads code or transmits data
+- No telemetry, no analytics, no accounts
+- No external API calls by default
 - Never modifies your repository
+- Generated reports are safe for air-gapped environments, client deliverables, and compliance audits
 
 ---
 
