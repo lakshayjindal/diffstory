@@ -18,6 +18,60 @@ from diffstory.git_utils import (
 from diffstory.html_generator import generate_report
 
 
+# ---------------------------------------------------------------------------
+# Config file (.diffstory.toml) loader
+# ---------------------------------------------------------------------------
+DEFAULT_CONFIG_PATH = Path.home() / ".diffstory.toml"
+LOCAL_CONFIG_PATH = Path.cwd() / ".diffstory.toml"
+
+
+def _load_config() -> dict:
+    """Load .diffstory.toml config from project or home directory.
+
+    Returns a dict with keys that serve as defaults for CLI flags.
+    """
+    config: dict = {}
+
+    for cfg_path in (LOCAL_CONFIG_PATH, DEFAULT_CONFIG_PATH):
+        if cfg_path.exists():
+            try:
+                text = cfg_path.read_text(encoding="utf-8")
+                config.update(_parse_toml_like(text))
+            except Exception:
+                pass  # ignore broken config files
+    return config
+
+
+def _parse_toml_like(text: str) -> dict:
+    """Minimal TOML parser — enough for our trivial config schema."""
+    result: dict = {}
+    current_section: Optional[str] = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current_section = stripped[1:-1].strip().lower()
+            continue
+        if "=" in stripped:
+            key, _, val = stripped.partition("=")
+            key = key.strip().lower()
+            val = val.strip().strip('"').strip("'")
+            # Lower-case boolean-ish strings
+            if val.lower() in ("true", "yes", "on"):
+                val = True
+            elif val.lower() in ("false", "no", "off"):
+                val = False
+            else:
+                try:
+                    val = int(val)
+                except ValueError:
+                    pass
+            full_key = f"{current_section}.{key}" if current_section else key
+            result[full_key] = val
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
@@ -85,6 +139,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--diff",
         metavar="FILE",
         help="Generate report from a diff file directly (no git repository needed)",
+    )
+
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=None,
+        help="Show git commands and timing information",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=None,
+        help="Show detailed debug output including stack traces",
     )
 
     return parser
@@ -228,8 +296,18 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    # Load config file for defaults
+    config = _load_config()
+    verbose = args.verbose if args.verbose is not None else config.get("cli.verbose", False)
+    debug = args.debug if args.debug is not None else config.get("cli.debug", False)
+
+    if debug:
+        verbose = True  # debug implies verbose
+
     # Handle --diff flag (read diff from file, no git needed)
     if args.diff:
+        if verbose:
+            print(f"  Reading diff file: {args.diff}")
         diff_text = _read_diff_from_file(args.diff)
         commit_a = None
         commit_b = None
@@ -241,8 +319,11 @@ def main() -> None:
         if has_exports:
             generate_exports(files, args.output, args.json, args.md, args.csv)
         try:
-            report_path = generate_report(files, output_path=args.output, repo_name="diff")
+            report_path = generate_report(files, output_path=args.output, repo_name="diff", verbose=verbose)
         except Exception as e:
+            if debug:
+                import traceback
+                traceback.print_exc()
             print(f"Error generating report: {e}", file=sys.stderr)
             sys.exit(1)
         print(f"\\n  HTML: {report_path}")
@@ -256,6 +337,14 @@ def main() -> None:
 
     # Parse revisions
     commit_a, commit_b, paths = _parse_revisions(args)
+
+    if verbose:
+        rev_desc = "staged" if args.staged else "working tree"
+        if commit_a and commit_b:
+            rev_desc = f"{commit_a}..{commit_b}"
+        elif commit_a:
+            rev_desc = commit_a
+        print(f"  Diff: {rev_desc}")
 
     try:
         # Get diff
@@ -273,12 +362,18 @@ def main() -> None:
         print("No changes detected.")
         sys.exit(0)
 
+    if verbose:
+        print(f"  Diff size: {len(diff_text)} bytes")
+
     # Parse diff
     files = parse_diff(diff_text)
 
     if not files:
         print("No parseable diff files found.")
         sys.exit(0)
+
+    if verbose:
+        print(f"  Files changed: {len(files)}")
 
     # Generate exports if requested
     has_exports = args.json or args.md or args.csv
@@ -293,10 +388,12 @@ def main() -> None:
             staged=args.staged,
             commit_a=commit_a,
             commit_b=commit_b,
+            verbose=verbose,
         )
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        if debug:
+            import traceback
+            traceback.print_exc()
         print(f"Error generating report: {e}", file=sys.stderr)
         sys.exit(1)
 

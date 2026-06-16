@@ -278,10 +278,33 @@ def _render_file_section(file: DiffFile, file_index: int, lexer_cache: dict) -> 
     sbs_html = ""
     inline_html = ""
 
-    for hunk in file.hunks:
-        unified_html += _render_unified_hunk(hunk, file.display_path, lexer_cache)
-        sbs_html += _render_sidebyside_hunk(hunk, file.display_path, lexer_cache)
-        inline_html += _render_inline_hunk(hunk, file.display_path, lexer_cache)
+    if file.is_binary_file:
+        # Binary file — show placeholder instead of diff hunks
+        binary_content = escape("Binary file")
+        if file.is_image:
+            binary_content = (
+                '<div class="binary-preview">'
+                '<div class="binary-icon">&#128247;</div>'
+                '<div class="binary-label">Image file &mdash; ' + escape(file_label) + '</div>'
+                '<div class="binary-note">Preview requires the file to be checked out locally</div>'
+                '</div>'
+            )
+        else:
+            binary_content = (
+                '<div class="binary-preview">'
+                '<div class="binary-icon">&#128196;</div>'
+                '<div class="binary-label">Binary file &mdash; ' + escape(file_label) + '</div>'
+                '<div class="binary-note">Diff content not available for binary files</div>'
+                '</div>'
+            )
+        unified_html = '<div class="binary-container">' + binary_content + '</div>'
+        sbs_html = '<div class="binary-container">' + binary_content + '</div>'
+        inline_html = '<div class="binary-container">' + binary_content + '</div>'
+    else:
+        for hunk in file.hunks:
+            unified_html += _render_unified_hunk(hunk, file.display_path, lexer_cache)
+            sbs_html += _render_sidebyside_hunk(hunk, file.display_path, lexer_cache)
+            inline_html += _render_inline_hunk(hunk, file.display_path, lexer_cache)
 
     additions = sum(1 for h in file.hunks for l in h.lines if l.line_type == "addition")
     deletions = sum(1 for h in file.hunks for l in h.lines if l.line_type == "deletion")
@@ -432,6 +455,7 @@ def generate_report(
     staged: bool = False,
     commit_a: Optional[str] = None,
     commit_b: Optional[str] = None,
+    verbose: bool = False,
 ) -> str:
     """Generate a self-contained HTML report.
 
@@ -442,7 +466,10 @@ def generate_report(
         staged: Whether the diff is from staged changes.
         commit_a: First commit in a range comparison.
         commit_b: Second commit in a range comparison.
+        verbose: Whether to print progress messages.
     """
+    if verbose:
+        print(f"  Generating report for {len(files)} file(s)...")
     from pathlib import Path
 
     lexer_cache: dict = {}
@@ -1707,6 +1734,39 @@ body {
 
 [data-theme="dark"] .search-match {
     background: #ffd70033;
+}
+
+/* Binary file preview */
+.binary-container {
+    padding: 20px;
+    text-align: center;
+}
+
+.binary-preview {
+    padding: 24px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+.binary-icon {
+    font-size: 40px;
+    margin-bottom: 8px;
+}
+
+.binary-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+}
+
+.binary-note {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
 }
 
 /* Diff line hover cursor for blame */

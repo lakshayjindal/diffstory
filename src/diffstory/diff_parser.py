@@ -7,6 +7,10 @@ import re
 from typing import Optional
 
 
+# Image extensions that can be previewed inline
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"})
+
+
 class DiffFile:
     """Represents a single file in a diff."""
 
@@ -27,10 +31,17 @@ class DiffFile:
         self.new_mode = new_mode
         self.similarity = similarity
         self.hunks: list[Hunk] = []
+        self.is_binary_file = False  # set True when binary, no hunks
 
     @property
     def is_binary(self) -> bool:
         return not self.hunks and self.status != "added"
+
+    @property
+    def is_image(self) -> bool:
+        """Check if the file path looks like a known image type."""
+        ext = "." + self.display_path.rsplit(".", 1)[-1].lower() if "." in self.display_path else ""
+        return ext in IMAGE_EXTENSIONS
 
 
 class Hunk:
@@ -123,6 +134,7 @@ def parse_diff(diff_text: str) -> list[DiffFile]:
 
         # Binary files
         if line.startswith("Binary files ") or line == "Binary files differ":
+            current_file.is_binary_file = True
             continue
 
         # New file mode
