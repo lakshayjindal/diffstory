@@ -1,6 +1,6 @@
 # Virtual environment
 diff2/
-
+.env
 # Python
 __pycache__/
 *.py[cod]
