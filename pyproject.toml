@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=59.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diffstory"
+version = "0.1.0"
+description = "Transform Git diffs into rich, interactive, self-contained HTML reports"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "Pygments>=2.10",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+
+[project.urls]
+Homepage = "https://github.com/lakshayjindal/diffstory"
+
+[project.scripts]
+diffstory = "diffstory.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

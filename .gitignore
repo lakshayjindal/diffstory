@@ -1,0 +1,31 @@
+# Virtual environment
+diff2/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Generated reports (only ignore files that look like reports, not README/requirements)
+*.html
+*.json
+*.csv
+
+# Ignore markdown reports but not root-level docs
+/report*.md
+*.md
+!/README.md
+!/requirements.md
+!/PHASE2_CONTEXT.md
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
