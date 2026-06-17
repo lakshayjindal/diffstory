@@ -200,14 +200,15 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    transition: margin-left 0.2s ease, min-width 0.2s ease;
+    transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
 }
 
 .sidebar.hidden {
-    margin-left: -300px;
-    min-width: 0;
     width: 0;
+    min-width: 0;
+    opacity: 0;
     border-right: none;
+    overflow: hidden;
 }
 
 .sidebar-search {
@@ -514,6 +515,14 @@ body {
 .diff-empty { background: var(--bg-secondary); }
 
 /* Inline Edit View - Word Diff */
+.diff-inline-change {
+    background: var(--bg-tertiary);
+}
+
+.diff-inline-change .line-prefix {
+    color: var(--text-secondary);
+}
+
 .wd-removed {
     background: var(--wd-del-bg);
     color: var(--del-text);
@@ -1513,6 +1522,36 @@ body {
     max-height: 120px;
     overflow-y: auto;
     white-space: pre-wrap;
+}
+
+/* Collapse bottom bar */
+.file-collapse-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: var(--bg-secondary);
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border-top: 1px solid var(--border);
+    transition: background 0.1s, color 0.15s;
+}
+
+.file-collapse-bottom:hover {
+    background: var(--bg-tertiary);
+    color: var(--text);
+}
+
+.file-collapse-icon {
+    font-size: 10px;
+    transition: transform 0.15s ease;
+}
+
+.file-section.collapsed .file-collapse-bottom {
+    display: none;
 }
 
 /* Insights count in meta */

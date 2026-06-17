@@ -275,6 +275,26 @@ function toggleFile(header) {
     section.classList.toggle('collapsed');
 }
 
+// Collapse / Expand All — also toggles analytics sections (Hotspots, etc.)
+function collapseAll() {
+    var allSections = document.querySelectorAll('.file-section, .analytics-section');
+    var allCollapsed = true;
+    for (var i = 0; i < allSections.length; i++) {
+        if (!allSections[i].classList.contains('collapsed')) {
+            allCollapsed = false;
+            break;
+        }
+    }
+    allSections.forEach(function(s) {
+        s.classList.toggle('collapsed', !allCollapsed);
+    });
+    var btn = document.getElementById('collapse-all-btn');
+    if (btn) {
+        // Label reflects the NEW state after toggle (allCollapsed is the OLD state)
+        btn.textContent = allCollapsed ? 'Collapse All' : 'Expand All';
+    }
+}
+
 // Sidebar Toggle
 var sidebarVisible = true;
 

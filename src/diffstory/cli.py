@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,7 @@ from diffstory.git_utils import (
     check_git_repo,
     get_diff_with_renames,
     get_git_root,
+    get_repo_name,
 )
 from diffstory.html_generator import generate_report
 from diffstory.loader import Spinner
@@ -344,6 +346,17 @@ def _read_diff_from_file(path: str) -> str:
         sys.exit(1)
 
 
+def _generate_story_filename(repo_name: str) -> str:
+    """Generate a filename like story-<repo>-DD-mon-YYYY-HH-MM-SS-ampm-day.html"""
+    now = datetime.now()
+    return (
+        f"story-{repo_name.lower().replace(' ', '-')}-"
+        f"{now.day}-{now.strftime('%b').lower()}-{now.year}-"
+        f"{now.strftime('%I')}-{now.strftime('%M')}-{now.strftime('%S')}-"
+        f"{now.strftime('%p').lower()}-{now.strftime('%a').lower()}.html"
+    )
+
+
 def _resolve_output_path(given_path: str, output_dir: Optional[str] = None) -> str:
     """Resolve the output file path.
 
@@ -418,6 +431,16 @@ def main() -> None:
 
     if debug:
         verbose = True  # debug implies verbose
+
+    # Generate default story filename if -o was not explicitly provided
+    if args.output == "diffstory-report.html":
+        try:
+            repo_name = get_repo_name()
+        except Exception:
+            repo_name = "diff"
+        if args.diff:
+            repo_name = Path(args.diff).stem
+        args.output = _generate_story_filename(repo_name)
 
     # Resolve output directory and path
     output_dir_resolved = _resolve_output_dir(args.output_dir, args.output)
