@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diffstory"
-version = "1.0.0"
+version = "1.0.1"
 description = "Transform Git diffs into rich, interactive, self-contained HTML reports"
 readme = "README.md"
 license = {text = "MIT"}
