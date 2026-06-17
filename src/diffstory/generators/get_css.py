@@ -515,14 +515,6 @@ body {
 .diff-empty { background: var(--bg-secondary); }
 
 /* Inline Edit View - Word Diff */
-.diff-inline-change {
-    background: var(--bg-tertiary);
-}
-
-.diff-inline-change .line-prefix {
-    color: var(--text-secondary);
-}
-
 .wd-removed {
     background: var(--wd-del-bg);
     color: var(--del-text);

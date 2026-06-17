@@ -191,16 +191,10 @@ def _render_sidebyside_hunk(hunk: Hunk, filepath: str, lexer_cache: dict) -> str
 
 
 def _render_inline_hunk(hunk: Hunk, filepath: str, lexer_cache: dict) -> str:
-    """Render a hunk in inline edit mode (word-level diff).
-
-    Merges paired deletion+addition lines into a single line showing
-    removed text struck-through and added text highlighted inline.
-    """
+    """Render a hunk in inline edit mode (word-level diff)."""
     lines_html = ""
-    i = 0
-    while i < len(hunk.lines):
-        line = hunk.lines[i]
 
+    for line in hunk.lines:
         if line.line_type == "context":
             old_no = str(line.old_lineno or "")
             new_no = str(line.new_lineno or "")
@@ -213,35 +207,7 @@ def _render_inline_hunk(hunk: Hunk, filepath: str, lexer_cache: dict) -> str:
                 '<span class="line-content">' + highlighted + '</span>'
                 '</div>\n'
             )
-            i += 1
-
-        elif line.line_type == "deletion" and i + 1 < len(hunk.lines) and hunk.lines[i + 1].line_type == "addition" and line.word_diff:
-            # Paired deletion+addition — merge into one line with inline word diff
-            add_line = hunk.lines[i + 1]
-            old_no = str(line.old_lineno or "")
-            new_no = str(add_line.new_lineno or "")
-
-            content_html = ""
-            for part in line.word_diff.parts:
-                if part["type"] == "delete":
-                    content_html += '<span class="wd-removed">' + escape(part["text"]) + '</span>'
-                elif part["type"] == "add":
-                    content_html += '<span class="wd-added">' + escape(part["text"]) + '</span>'
-                elif part["type"] == "equal":
-                    content_html += '<span class="wd-equal">' + escape(part["text"]) + '</span>'
-
-            lines_html += (
-                '<div class="diff-line diff-inline-change" data-old="' + old_no + '" data-new="' + new_no + '">'
-                '<span class="line-prefix"> </span>'
-                '<span class="line-num line-num-old">' + old_no + '</span>'
-                '<span class="line-num line-num-new">' + new_no + '</span>'
-                '<span class="line-content">' + content_html + '</span>'
-                '</div>\n'
-            )
-            i += 2
-
         elif line.line_type == "deletion":
-            # Unpaired deletion — render as standalone
             old_no = str(line.old_lineno or "")
             lines_html += (
                 '<div class="diff-line diff-deletion" data-old="' + old_no + '">'
@@ -259,10 +225,8 @@ def _render_inline_hunk(hunk: Hunk, filepath: str, lexer_cache: dict) -> str:
             else:
                 lines_html += escape(line.content)
             lines_html += '</span></div>\n'
-            i += 1
 
         elif line.line_type == "addition":
-            # Standalone addition (skip if it was already consumed by a paired deletion)
             new_no = str(line.new_lineno or "")
             lines_html += (
                 '<div class="diff-line diff-addition" data-new="' + new_no + '">'
@@ -280,10 +244,6 @@ def _render_inline_hunk(hunk: Hunk, filepath: str, lexer_cache: dict) -> str:
             else:
                 lines_html += escape(line.content)
             lines_html += '</span></div>\n'
-            i += 1
-
-        else:
-            i += 1
 
     header_extra = _hunk_header_extra(hunk.header)
     hunk_html = (
