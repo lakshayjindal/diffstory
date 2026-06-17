@@ -147,7 +147,7 @@ diffstory --staged --json --md --csv
 
 ### Overview
 
-![Overview](docs/images/overview.png)
+![Overview](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/overview.png)
 
 The main report screen. A sidebar lists all changed files with add/delete counts. The diff content area renders each file with its full change history. The toolbar gives access to view switching, search, theme, statistics, and the file list.
 
@@ -155,7 +155,7 @@ The main report screen. A sidebar lists all changed files with add/delete counts
 
 ### Unified View
 
-![Unified View](docs/images/unified-view.png)
+![Unified View](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/unified-view.png)
 
 The default view. Lines are color-coded: green for additions, red for deletions. Line numbers for both old and new files are displayed side by side. Syntax highlighting is applied via Pygments.
 
@@ -163,7 +163,7 @@ The default view. Lines are color-coded: green for additions, red for deletions.
 
 ### Side-by-Side View
 
-![Side By Side](docs/images/side-by-side.png)
+![Side By Side](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/side-by-side.png)
 
 Original file on the left, modified file on the right. Lines are aligned by position. Useful for understanding structural changes at a glance.
 
@@ -171,7 +171,7 @@ Original file on the left, modified file on the right. Lines are aligned by posi
 
 ### Inline View
 
-![Inline View](docs/images/inline-view.png)
+![Inline View](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/inline-view.png)
 
 Word-level diffs. Instead of showing a removed line and an added line, changed words are highlighted inline — removed text is struck through in red, added text is highlighted in green.
 
@@ -179,7 +179,7 @@ Word-level diffs. Instead of showing a removed line and an added line, changed w
 
 ### Blame Tooltip
 
-![Blame Tooltip](docs/images/blame-tooltip.png)
+![Blame Tooltip](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/blame-tooltip.png)
 
 Hover any changed line to see a tooltip with the author name, commit hash, commit subject, date, and relative time. Click the line to open a full commit detail drawer.
 
@@ -187,7 +187,7 @@ Hover any changed line to see a tooltip with the author name, commit hash, commi
 
 ### Statistics Dashboard
 
-![Statistics Dashboard](docs/images/statistics-dashboard.png)
+![Statistics Dashboard](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/statistics-dashboard.png)
 
 A floating panel with file counts, add/delete deltas, author and commit counts, contributor breakdown, and a table of the most-changed files.
 
