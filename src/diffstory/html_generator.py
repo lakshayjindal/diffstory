@@ -12,6 +12,7 @@ import json
 from diffstory.diff_parser import DiffFile, DiffLine, Hunk, compute_word_diffs
 from diffstory.syntax import get_highlighted_line, get_syntax_styles
 from diffstory.git_utils import get_blame_for_revision, get_commit_info, get_repo_name
+from diffstory.generators import _get_css, _get_javascript
 
 def _compute_stats(files: list[DiffFile], blame_data: Optional[dict] = None, commits_data: Optional[dict] = None) -> dict:
     """Compute summary statistics, including blame-derived stats if available."""
