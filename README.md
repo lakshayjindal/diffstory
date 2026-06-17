@@ -24,13 +24,13 @@ diffstory --staged
 
 ## Screenshots
 
-![Overview](docs/images/overview.png)
-![Inline View](docs/images/inline-view.png)
-![Blame Tooltip](docs/images/blame-tooltip.png)
-![Side By Side](docs/images/side-by-side.png)
-![Statistics Dashboard](docs/images/statistics-dashboard.png)
-![Unified View](docs/images/unified-view.png)
-![Evolution / Provenance](docs/images/evolution.png)
+![Overview](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/overview.png)
+![Inline View](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/inline-view.png)
+![Blame Tooltip](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/blame-tooltip.png)
+![Side By Side](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/side-by-side.png)
+![Statistics Dashboard](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/statistics-dashboard.png)
+![Unified View](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/unified-view.png)
+![Evolution / Provenance](https://raw.githubusercontent.com/lakshayjindal/diffstory/master/docs/images/evolution.png)
 ---
 
 ## Why DiffStory?
