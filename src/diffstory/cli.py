@@ -17,6 +17,7 @@ from diffstory.git_utils import (
     get_diff_with_renames,
     get_git_root,
     get_repo_name,
+    git_fetch,
 )
 from diffstory.html_generator import generate_report
 from diffstory.loader import Spinner
@@ -99,6 +100,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  diffstory --staged           # staged changes\\n"
             "  diffstory HEAD~3 HEAD        # commit comparison\\n"
             "  diffstory main feature       # branch comparison\\n"
+            "  diffstory --reverse old new   # reversed comparison\\n"
+            "  diffstory --remote origin/main origin/feature  # remote branches\\n"
             "  diffstory -o report.html     # custom output file\\n"
             "  diffstory --json             # JSON export\\n"
             "  diffstory HEAD~3 HEAD src/   # restrict to path"
@@ -191,6 +194,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Show git commands and timing information",
+    )
+
+    parser.add_argument(
+        "--reverse", "-r",
+        action="store_true",
+        default=False,
+        help="Reverse the comparison order: show changes from B to A instead of A to B",
+    )
+
+    parser.add_argument(
+        "--remote",
+        metavar="REMOTE",
+        nargs="?",
+        const="origin",
+        default=None,
+        help="Fetch from REMOTE (default: origin) before comparing. Useful for comparing remote branches: diffstory --remote origin/main origin/feature",
     )
 
     parser.add_argument(
@@ -492,6 +511,30 @@ def main() -> None:
 
     # Parse revisions
     commit_a, commit_b, paths = _parse_revisions(args)
+
+    # Handle --reverse: swap commit_a and commit_b
+    if args.reverse and commit_a is not None and commit_b is not None:
+        commit_a, commit_b = commit_b, commit_a
+        if verbose:
+            print(f"  Reversed comparison: {commit_a}..{commit_b}")
+    elif args.reverse and commit_a is not None and commit_b is None:
+        # Single revision with --reverse: compare HEAD to the revision instead
+        commit_b = commit_a
+        commit_a = "HEAD"
+        if verbose:
+            print(f"  Reversed single-revision: {commit_a}..{commit_b}")
+
+    # Handle --remote: fetch from remote before comparing
+    if args.remote is not None:
+        remote_name = args.remote
+        if verbose:
+            print(f"  Fetching from remote '{remote_name}'...")
+        try:
+            git_fetch(remote_name)
+            if verbose:
+                print(f"  Fetch from '{remote_name}' complete.")
+        except GitError as e:
+            print(f"Warning: Could not fetch from '{remote_name}': {e}", file=sys.stderr)
 
     with Spinner() as spinner:
         spinner.update("Fetching diff...")

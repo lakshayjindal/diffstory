@@ -93,6 +93,16 @@ def get_git_root(cwd: Optional[Path] = None) -> Optional[str]:
         return None
 
 
+def git_fetch(remote: str = "origin", cwd: Optional[Path] = None) -> None:
+    """Fetch the latest refs from a remote.
+
+    Runs `git fetch <remote>` to update remote-tracking branches
+    before comparing them locally. Silently succeeds if the fetch
+    completes; raises GitError on failure.
+    """
+    _run_git(["fetch", remote], cwd=cwd)
+
+
 def get_diff(
     staged: bool = False,
     commit_a: Optional[str] = None,
