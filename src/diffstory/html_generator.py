@@ -538,15 +538,9 @@ def generate_report(
     progress_callback: Optional[callable] = None,
     review_mode: bool = False,
     hotspots: Optional[list] = None,
-    timeline: Optional[dict] = None,
-    folder_stats: Optional[dict] = None,
     dependency_diffs: Optional[list] = None,
     todos: Optional[list] = None,
-    test_impact: Optional[list] = None,
-    complexity_delta: Optional[list] = None,
-    semantic_summaries: Optional[list] = None,
-    evolution_commits: Optional[list] = None,
-    evolution_files: Optional[dict] = None,
+    change_summaries: Optional[list] = None,
 ) -> str:
     """Generate a self-contained HTML report.
 
@@ -650,15 +644,9 @@ def generate_report(
     # Build analytics HTML sections
     hotspots_html = _build_hotspots_html(hotspots)
     risk_html = _build_risk_analysis_html(files, hotspots, stats)
-    ownership_html = _build_ownership_html(blame_data_dict["line_blame"], files)
-    timeline_html = _build_timeline_html(timeline)
-    summaries_html = _build_summaries_html(semantic_summaries)
+    summaries_html = _build_change_summary_html(change_summaries)
     deps_html = _build_dependency_html(dependency_diffs)
     todos_html = _build_todos_html(todos)
-    test_impact_html = _build_test_impact_html(test_impact)
-    heatmap_html = _build_heatmap_html(folder_stats)
-    complexity_html = _build_complexity_html(complexity_delta)
-    evolution_html = _build_evolution_html(evolution_commits, evolution_files)
     review_mode_js = "true" if review_mode else "false"
 
     # Build review checkboxes for file headers
@@ -686,15 +674,9 @@ def generate_report(
         type_filters_html=type_filters_html,
         hotspots_html=hotspots_html,
         risk_html=risk_html,
-        ownership_html=ownership_html,
-        timeline_html=timeline_html,
         summaries_html=summaries_html,
         deps_html=deps_html,
         todos_html=todos_html,
-        test_impact_html=test_impact_html,
-        heatmap_html=heatmap_html,
-        complexity_html=complexity_html,
-        evolution_html=evolution_html,
         review_checkboxes_html=review_checkboxes_html,
         review_mode=review_mode,
     )
@@ -806,111 +788,7 @@ def _build_risk_analysis_html(files: list, hotspots: Optional[list], stats: dict
     )
 
 
-def _build_ownership_html(blame_data: dict, files: list) -> str:
-    if not blame_data or not files:
-        return ""
-
-    # Compute ownership per file
-    file_ownership: dict[str, dict] = {}
-    file_line_counts: dict[str, int] = {}
-
-    for key, entry in blame_data.items():
-        file_idx = key.split(":")[0]
-        try:
-            fi = int(file_idx)
-            if fi < len(files):
-                filepath = files[fi].display_path
-            else:
-                continue
-        except (ValueError, IndexError):
-            continue
-
-        if filepath not in file_ownership:
-            file_ownership[filepath] = {}
-            file_line_counts[filepath] = 0
-
-        author = entry.get("author", "Unknown")
-        file_ownership[filepath][author] = file_ownership[filepath].get(author, 0) + 1
-        file_line_counts[filepath] += 1
-
-    items = ""
-    for filepath in sorted(file_ownership.keys())[:10]:
-        authors = file_ownership[filepath]
-        total = file_line_counts[filepath]
-        if total == 0:
-            continue
-        sorted_authors = sorted(authors.items(), key=lambda x: -x[1])
-        top_author = sorted_authors[0][0]
-        top_pct = int(sorted_authors[0][1] / total * 100)
-
-        # Reviewer recommendation
-        reviewer = f"Suggested reviewer: {top_author}"
-
-        items += (
-            '<div class="ownership-item">'
-            '<div class="ownership-file">' + escape(filepath) + '</div>'
-            '<div class="ownership-top">'
-            '<span class="ownership-author">' + escape(top_author) + '</span>'
-            '<span class="ownership-pct">' + str(top_pct) + '%</span>'
-            '<div class="ownership-bar-bg"><div class="ownership-bar" style="width:' + str(top_pct) + '%"></div></div>'
-            '</div>'
-            '<div class="ownership-reviewer">&#10003; ' + escape(reviewer) + '</div>'
-            '</div>'
-        )
-
-    if not items:
-        return ""
-
-    return (
-        '<div class="analytics-section" id="ownership-section">'
-        '<div class="analytics-header" onclick="toggleAnalytics(this)">'
-        '<span class="analytics-icon">&#128100;</span>'
-        '<span class="analytics-title">File Ownership</span>'
-        '<span class="analytics-subtitle">Top contributor per file with reviewer suggestion</span>'
-        '<span class="file-toggle">&#9660;</span>'
-        '</div>'
-        '<div class="analytics-body">' + items + '</div>'
-        '</div>'
-    )
-
-
-def _build_timeline_html(timeline: Optional[dict]) -> str:
-    if not timeline or not timeline.get("counts"):
-        return ""
-    days = timeline["days"]
-    counts = timeline["counts"]
-    max_count = max(counts) if counts else 1
-
-    bars = ""
-    for i, day in enumerate(days):
-        c = counts[i]
-        bar_height = max(2, int(c / max_count * 100)) if max_count > 0 else 0
-        bars += (
-            '<div class="timeline-col">'
-            '<div class="timeline-bar-container">'
-            '<div class="timeline-bar" style="height:' + str(bar_height) + '%"></div>'
-            '</div>'
-            '<div class="timeline-label">' + day + '</div>'
-            '<div class="timeline-count">' + str(c) + '</div>'
-            '</div>'
-        )
-
-    return (
-        '<div class="analytics-section" id="timeline-section">'
-        '<div class="analytics-header" onclick="toggleAnalytics(this)">'
-        '<span class="analytics-icon">&#128200;</span>'
-        '<span class="analytics-title">Change Timeline</span>'
-        '<span class="analytics-subtitle">Commits by day of week (recent ' + str(sum(counts)) + ' commits)</span>'
-        '<span class="file-toggle">&#9660;</span>'
-        '</div>'
-        '<div class="analytics-body">'
-        '<div class="timeline-chart">' + bars + '</div>'
-        '</div>'
-        '</div>'
-    )
-
-
-def _build_summaries_html(summaries: Optional[list]) -> str:
+def _build_change_summary_html(summaries: Optional[list]) -> str:
     if not summaries:
         return ""
     items = "".join(
@@ -921,7 +799,7 @@ def _build_summaries_html(summaries: Optional[list]) -> str:
         '<div class="analytics-section" id="summaries-section">'
         '<div class="analytics-header" onclick="toggleAnalytics(this)">'
         '<span class="analytics-icon">&#128196;</span>'
-        '<span class="analytics-title">Summary</span>'
+        '<span class="analytics-title">Change Summary</span>'
         '<span class="analytics-subtitle">What changed in this diff</span>'
         '<span class="file-toggle">&#9660;</span>'
         '</div>'
@@ -986,143 +864,6 @@ def _build_todos_html(todos: Optional[list]) -> str:
     )
 
 
-def _build_test_impact_html(test_impact: Optional[list]) -> str:
-    if not test_impact:
-        return ""
-    items = ""
-    for ti in test_impact[:10]:
-        tests_html = "".join(
-            '<div class="test-file">&#9654; ' + escape(t) + '</div>'
-            for t in ti["tests"][:5]
-        )
-        items += (
-            '<div class="test-impact-item">'
-            '<div class="test-source">Modified: ' + escape(ti["source"]) + '</div>'
-            '<div class="test-related">Related tests:</div>'
-            + tests_html +
-            '</div>'
-        )
-    return (
-        '<div class="analytics-section" id="test-impact-section">'
-        '<div class="analytics-header" onclick="toggleAnalytics(this)">'
-        '<span class="analytics-icon">&#128220;</span>'
-        '<span class="analytics-title">Testing Impact</span>'
-        '<span class="analytics-subtitle">Related tests to run</span>'
-        '<span class="file-toggle">&#9660;</span>'
-        '</div>'
-        '<div class="analytics-body">' + items + '</div>'
-        '</div>'
-    )
-
-
-def _build_heatmap_html(folder_stats: Optional[dict]) -> str:
-    if not folder_stats:
-        return ""
-    max_changes = max(fs["changes"] for fs in folder_stats.values()) if folder_stats else 1
-
-    items = ""
-    for folder in sorted(folder_stats.keys()):
-        fs = folder_stats[folder]
-        bar_width = max(2, int(fs["changes"] / max_changes * 100))
-        items += (
-            '<div class="heatmap-item">'
-            '<span class="heatmap-folder">' + escape(folder) + '</span>'
-            '<div class="heatmap-bar-bg"><div class="heatmap-bar" style="width:' + str(bar_width) + '%"></div></div>'
-            '<span class="heatmap-count">' + str(fs["changes"]) + ' files, +' + str(fs["additions"]) + '/-' + str(fs["deletions"]) + '</span>'
-            '</div>'
-        )
-
-    return (
-        '<div class="analytics-section" id="heatmap-section">'
-        '<div class="analytics-header" onclick="toggleAnalytics(this)">'
-        '<span class="analytics-icon">&#128202;</span>'
-        '<span class="analytics-title">Folder Heatmap</span>'
-        '<span class="analytics-subtitle">Change distribution across directories</span>'
-        '<span class="file-toggle">&#9660;</span>'
-        '</div>'
-        '<div class="analytics-body">' + items + '</div>'
-        '</div>'
-    )
-
-
-def _build_complexity_html(complexity_delta: Optional[list]) -> str:
-    if not complexity_delta:
-        return ""
-    items = ""
-    for cd in complexity_delta[:10]:
-        items += '<div class="complexity-file">' + escape(cd["file"]) + '</div>'
-        for fn in cd["functions"][:5]:
-            delta = fn["new_lines"] - fn["old_lines"]
-            delta_str = ("+" if delta >= 0 else "") + str(delta)
-            delta_class = "complexity-delta-up" if delta > 0 else ("complexity-delta-down" if delta < 0 else "")
-            items += (
-                '<div class="complexity-func">'
-                '<span class="complexity-name">' + escape(fn["name"]) + '()</span>'
-                '<span class="complexity-lines">' + str(fn["old_lines"]) + ' &#8594; ' + str(fn["new_lines"]) + '</span>'
-                '<span class="complexity-delta ' + delta_class + '">(' + delta_str + ')</span>'
-                '</div>'
-            )
-
-    return (
-        '<div class="analytics-section" id="complexity-section">'
-        '<div class="analytics-header" onclick="toggleAnalytics(this)">'
-        '<span class="analytics-icon">&#128300;</span>'
-        '<span class="analytics-title">Complexity Delta</span>'
-        '<span class="analytics-subtitle">Function size changes in Python files</span>'
-        '<span class="file-toggle">&#9660;</span>'
-        '</div>'
-        '<div class="analytics-body">' + items + '</div>'
-        '</div>'
-    )
-
-
-def _build_evolution_html(evolution_commits: Optional[list], evolution_files: Optional[dict]) -> str:
-    if not evolution_commits or not evolution_files:
-        return ""
-
-    # Build commit list for the slider
-    commits_json_str = json.dumps([{
-        "hash": c["hash"][:8],
-        "subject": c.get("subject", ""),
-        "author": c.get("author", ""),
-    } for c in evolution_commits])
-
-    # Build evolution content for each file
-    file_evo_html = ""
-    for filepath, evo in evolution_files.items():
-        # Store content snippets in data attributes
-        file_evo_html += (
-            '<div class="evolution-file" data-file="' + escape(filepath) + '">'
-            '<div class="evolution-file-header">' + escape(filepath) + '</div>'
-            '<pre class="evolution-content" id="evo-content-' + escape(filepath.replace("/", "-")) + '">'
-            + (escape(evo[0]["content"][:500]) if evo else "No content") +
-            '</pre>'
-            '</div>'
-        )
-
-    return (
-        '<div class="analytics-section" id="evolution-section">'
-        '<div class="analytics-header" onclick="toggleAnalytics(this)">'
-        '<span class="analytics-icon">&#128257;</span>'
-        '<span class="analytics-title">Commit Evolution</span>'
-        '<span class="analytics-subtitle">Scrub through commits to see how files evolved</span>'
-        '<span class="file-toggle">&#9660;</span>'
-        '</div>'
-        '<div class="analytics-body">'
-        '<div class="evolution-slider-container">'
-        '<input type="range" class="evolution-slider" id="evolution-slider" min="0" max="' + str(len(evolution_commits) - 1) + '" value="0" oninput="onEvolutionSlide(this.value)">'
-        '<div class="evolution-labels" id="evolution-labels">'
-        '<span>' + escape(evolution_commits[0]["subject"][:50]) + '</span>'
-        '<span>' + escape(evolution_commits[-1]["subject"][:50]) + '</span>'
-        '</div>'
-        '<div class="evolution-commit-info" id="evolution-commit-info"></div>'
-        '</div>'
-        '<div id="evolution-files">' + file_evo_html + '</div>'
-        '<div class="evolution-data" id="evolution-data" style="display:none">' + commits_json_str + '</div>'
-        '</div>'
-        '</div>'
-    )
-
 
 def _build_html_template(
     repo: str,
@@ -1138,15 +879,9 @@ def _build_html_template(
     type_filters_html: str = "",
     hotspots_html: str = "",
     risk_html: str = "",
-    ownership_html: str = "",
-    timeline_html: str = "",
     summaries_html: str = "",
     deps_html: str = "",
     todos_html: str = "",
-    test_impact_html: str = "",
-    heatmap_html: str = "",
-    complexity_html: str = "",
-    evolution_html: str = "",
     review_checkboxes_html: str = "",
     review_mode: bool = False,
 ) -> str:
@@ -1320,7 +1055,7 @@ def _build_html_template(
         '                Generated on ' + escaped_time + '\n'
         '                <span id="active-filters" class="active-filters"></span>\n'
         '            </div>\n'
-                + hotspots_html + '\n'        + risk_html + '\n'        + ownership_html + '\n'        + timeline_html + '\n'        + summaries_html + '\n'        + deps_html + '\n'        + todos_html + '\n'        + test_impact_html + '\n'        + heatmap_html + '\n'        + complexity_html + '\n'        + evolution_html + '\n'+ file_sections_html + '\n'
+                + hotspots_html + '\n'        + risk_html + '\n'        + summaries_html + '\n'        + deps_html + '\n'        + todos_html + '\n'+ file_sections_html + '\n'
         '        </main>\n'
         '    </div>\n'
         '</div>\n'

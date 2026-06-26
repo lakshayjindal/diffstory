@@ -23,14 +23,8 @@ from diffstory.html_generator import generate_report
 from diffstory.loader import Spinner
 from diffstory.git_utils import (
     get_hotspots,
-    get_change_timeline,
-    get_folder_stats,
     get_dependency_files_for_diff,
     scan_diff_for_todos,
-    map_related_tests,
-    get_complexity_delta,
-    get_commits_for_evolution,
-    compute_file_evolution,
     compute_semantic_summary,
 )
 
@@ -566,37 +560,15 @@ def main() -> None:
 
         # Collect analytics data (protected from failures)
         hotspots = []
-        timeline = {}
-        folder_stats = {}
         deps = []
         todos = []
-        test_impact = []
-        complexity = []
         summaries = []
-        evolution_commits = []
-        evolution_files_data = {}
 
         try:
             hotspots = get_hotspots()
-            timeline = get_change_timeline()
-            folder_stats = get_folder_stats(files)
             deps = get_dependency_files_for_diff(files)
             todos = scan_diff_for_todos(diff_text)
-            test_impact = map_related_tests(files)
-            complexity = get_complexity_delta(files)
             summaries = compute_semantic_summary(files)
-
-            # Commit evolution data
-            if commit_a is not None or commit_b is not None:
-                base = commit_a or "HEAD"
-                head = commit_b or "HEAD"
-                commits = get_commits_for_evolution(limit=20, base_commit=base, head_commit=head)
-                if commits:
-                    evolution_commits = commits
-                    for f in files[:3]:
-                        evo = compute_file_evolution(f.display_path, commits)
-                        if evo:
-                            evolution_files_data[f.display_path] = evo
         except Exception as e:
             if verbose:
                 print(f"  Analytics warning: {e}")
@@ -634,15 +606,9 @@ def main() -> None:
                 progress_callback=on_blame_progress if total_files > 1 else None,
                 review_mode=args.review,
                 hotspots=hotspots,
-                timeline=timeline,
-                folder_stats=folder_stats,
                 dependency_diffs=deps,
                 todos=todos,
-                test_impact=test_impact,
-                complexity_delta=complexity,
-                semantic_summaries=summaries,
-                evolution_commits=evolution_commits,
-                evolution_files=evolution_files_data,
+                change_summaries=summaries,
             )
         except Exception as e:
             if debug:

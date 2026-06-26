@@ -636,27 +636,6 @@ function toggleAnalytics(header) {
     section.classList.toggle('collapsed');
 }
 
-// Insights panel toggle
-function toggleInsights() {
-    var panel = document.getElementById('insights-panel');
-    if (panel) panel.classList.toggle('hidden');
-}
-
-// Evolution slider
-function onEvolutionSlide(value) {
-    var idx = parseInt(value);
-    var infoEl = document.getElementById('evolution-commit-info');
-    var dataEl = document.getElementById('evolution-data');
-    if (!dataEl || !infoEl) return;
-    try {
-        var commits = JSON.parse(dataEl.textContent);
-        var commit = commits[idx];
-        infoEl.textContent = commit.author + ' - ' + (commit.subject || '').substring(0, 60);
-    } catch(e) {
-        infoEl.textContent = 'Commit ' + (idx + 1);
-    }
-}
-
 // Review mode
 var reviewState = JSON.parse(localStorage.getItem('diffstory-review') || '{}');
 

@@ -136,7 +136,6 @@ diffstory --staged --json --md --csv
 | Dark mode | — | — | ✓ |
 | Keyboard shortcuts | — | — | ✓ |
 | Deep linking | — | — | ✓ |
-| Commit evolution slider | — | — | ✓ |
 | Risk analysis & hotspots | — | — | ✓ |
 | Single-file output | — | ✓ | ✓ |
 | No runtime dependencies | ✓ | — | ✓ |
